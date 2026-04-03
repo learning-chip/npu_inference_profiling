@@ -60,6 +60,13 @@ def main() -> None:
         help="Decode tokens per request (keep small for prefill-focused runs)",
     )
     parser.add_argument("--dtype", type=str, default="bfloat16")
+    parser.add_argument(
+        "--enforce-eager",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Eager mode (default): no CUDA graph / compilation. "
+        "Use --no-enforce-eager for graph/compiled mode.",
+    )
     args = parser.parse_args()
 
     profile_root = args.profile_dir
@@ -76,7 +83,7 @@ def main() -> None:
         dtype=args.dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=1,
-        enforce_eager=True,
+        enforce_eager=args.enforce_eager,
         profiler_config=_prefill_profiler_config(profile_root),
     )
 
@@ -86,6 +93,9 @@ def main() -> None:
         min_tokens=args.max_tokens,
         ignore_eos=True,
     )
+
+    # Warmup run (Triton/JIT, etc.); keep compile out of the profiled window.
+    llm.generate(prompts, sampling_params)
 
     llm.start_profile()
     llm.generate(prompts, sampling_params)
