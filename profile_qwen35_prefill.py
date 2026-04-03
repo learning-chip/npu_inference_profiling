@@ -35,7 +35,7 @@ def _prefill_profiler_config(profile_dir: Path) -> ProfilerConfig:
     return ProfilerConfig(
         profiler="torch",
         torch_profiler_dir=str(profile_dir.resolve()),
-        torch_profiler_with_stack=False,
+        torch_profiler_with_stack=True,
         delay_iterations=0,
         max_iterations=1,
         ignore_frontend=True,
@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--profile-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "vllm_prefill_profile",
+        default=Path(__file__).resolve().parent / "vllm_prefill_profile_eager",
         help="Absolute or relative directory for torch profiler output",
     )
     parser.add_argument(
@@ -76,6 +76,7 @@ def main() -> None:
         dtype=args.dtype,
         max_model_len=max_model_len,
         tensor_parallel_size=1,
+        enforce_eager=True,
         profiler_config=_prefill_profiler_config(profile_root),
     )
 
