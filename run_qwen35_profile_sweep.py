@@ -30,6 +30,19 @@ MODEL_9B = (
     "c202236235762e1c871ad0ccb60c8ee5ba337b9a/"
 )
 
+# 9B first, then 0.8B; eager-only sweep uses these (batch, seq_len) pairs.
+SWEEP_MODELS: list[tuple[str, str]] = [
+    ("9B", MODEL_9B),
+    ("0.8B", MODEL_0_8B),
+]
+# Avoid large batch × long seq (huge traces); similar token corners.
+SWEEP_BATCH_SEQ_PAIRS: list[tuple[int, int]] = [
+    (1, 4096),
+    (1, 16384),
+    (2, 8192),
+    (16, 1024),
+]
+
 PROFILE_SCRIPT = Path(__file__).resolve().parent / "profile_qwen35_prefill.py"
 SUMMARY_MD = Path(__file__).resolve().parent / "qwen35_profile_summary.md"
 RESULTS_JSON = "sweep_results.json"
@@ -248,143 +261,32 @@ def _append_data_driven_operator_analysis(
     results: list[CaseResult],
     top_ops_by_case: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """Fill ``lines`` with tables and bullets derived only from measured top-10 data."""
-    ok_by_key: dict[tuple[str, bool, int, int], CaseResult] = {}
+    """Append measured top-1 summary table (eager-only sweep)."""
+
+    lines.append("### Sweep grid: top-1 operator per cell (eager, run order)")
+    lines.append("")
+    lines.append("| Model | Batch | Seq len | Case id | Top-1 op | Ratio % | Status |")
+    lines.append("|---|:---:|---:|:---|:---|---:|:---|")
     for r in results:
-        if r.status != "ok":
-            continue
-        ok_by_key[(r.model_label, r.eager, r.batch_size, r.seq_len)] = r
-
-    lines.append("### Eager vs graph: top-1 operator (same model, batch, sequence)")
-    lines.append("")
-    lines.append(
-        "| Model | Batch | Seq len | Eager #1 op | Eager % | Graph #1 op | Graph % | "
-        "|Δ top-1 %|"
-    )
-    lines.append("|---|---:|---:|:---|---:|:---|---:|---:|")
-    eg_rows: list[tuple[str, float, float]] = []
-    seen_eg: set[tuple[str, int, int]] = set()
-    for r in results:
-        if r.status != "ok":
-            continue
-        k3 = (r.model_label, r.batch_size, r.seq_len)
-        if k3 in seen_eg:
-            continue
-        eager_r = next(
-            (
-                x
-                for x in results
-                if x.status == "ok" and (x.model_label, x.batch_size, x.seq_len) == k3 and x.eager
-            ),
-            None,
-        )
-        graph_r = next(
-            (
-                x
-                for x in results
-                if x.status == "ok" and (x.model_label, x.batch_size, x.seq_len) == k3 and not x.eager
-            ),
-            None,
-        )
-        if not eager_r or not graph_r:
-            continue
-        seen_eg.add(k3)
-        te = _top1_op(top_ops_by_case.get(eager_r.case_id))
-        tg = _top1_op(top_ops_by_case.get(graph_r.case_id))
-        if not te or not tg:
-            continue
-        e_op, e_pct = te
-        g_op, g_pct = tg
-        d = abs(e_pct - g_pct)
-        eg_rows.append((eager_r.case_id, e_pct, g_pct))
-        lines.append(
-            f"| {r.model_label} | {r.batch_size} | {r.seq_len} | {e_op} | {e_pct:.3f} | "
-            f"{g_op} | {g_pct:.3f} | {d:.3f} |"
-        )
-    if not seen_eg:
-        lines.append("| *(no pair with both eager and graph succeeded)* | | | | | | | |")
-    lines.append("")
-
-    lines.append("### Top-1 operator share vs sequence length (fixed model, mode, batch)")
-    lines.append("")
-    seq_lens = [4096, 16384, 65536]
-    batches = [1, 4, 32]
-    added_seq = False
-    for ml in sorted({r.model_label for r in results}):
-        for eager in (True, False):
-            mode = "eager" if eager else "graph"
-            for b in batches:
-                cells: list[str] = []
-                ok_all = True
-                for sl in seq_lens:
-                    rr = ok_by_key.get((ml, eager, b, sl))
-                    if not rr:
-                        ok_all = False
-                        cells.append("—")
-                        continue
-                    t1 = _top1_op(top_ops_by_case.get(rr.case_id))
-                    if not t1:
-                        ok_all = False
-                        cells.append("—")
-                        continue
-                    op, pct = t1
-                    short = op if len(op) <= 40 else op[:37] + "…"
-                    cells.append(f"{short} ({pct:.2f}%)")
-                if not ok_all:
-                    continue
+        if r.status == "ok":
+            t1 = _top1_op(top_ops_by_case.get(r.case_id))
+            if t1:
+                op, pct = t1
                 lines.append(
-                    f"- **{ml}**, {mode}, batch **{b}**: "
-                    f"seq 4K → {cells[0]}; 16K → {cells[1]}; 64K → {cells[2]}"
+                    f"| {r.model_label} | {r.batch_size} | {r.seq_len} | "
+                    f"`{r.case_id}` | {op} | {pct:.3f} | ok |"
                 )
-                added_seq = True
-    if not added_seq:
-        lines.append(
-            "- *(No model/mode/batch line has all three sequence lengths in `ok` status.)*"
-        )
-    lines.append("")
-
-    lines.append("### Top-1 operator share vs batch size (fixed model, mode, seq)")
-    lines.append("")
-    added_batch = False
-    for ml in sorted({r.model_label for r in results}):
-        for eager in (True, False):
-            mode = "eager" if eager else "graph"
-            for sl in seq_lens:
-                cells: list[str] = []
-                ok_all = True
-                for b in batches:
-                    rr = ok_by_key.get((ml, eager, b, sl))
-                    if not rr:
-                        ok_all = False
-                        cells.append("—")
-                        continue
-                    t1 = _top1_op(top_ops_by_case.get(rr.case_id))
-                    if not t1:
-                        ok_all = False
-                        cells.append("—")
-                        continue
-                    op, pct = t1
-                    short = op if len(op) <= 36 else op[:33] + "…"
-                    cells.append(f"b{b}: {short} ({pct:.2f}%)")
-                if not ok_all:
-                    continue
+            else:
                 lines.append(
-                    f"- **{ml}**, {mode}, seq **{sl}**: {cells[0]} | {cells[1]} | {cells[2]}"
+                    f"| {r.model_label} | {r.batch_size} | {r.seq_len} | "
+                    f"`{r.case_id}` | — | — | ok (no op csv) |"
                 )
-                added_batch = True
-    if not added_batch:
-        lines.append(
-            "- *(No model/mode/seq line has all three batch sizes in `ok` status.)*"
-        )
+        else:
+            lines.append(
+                f"| {r.model_label} | {r.batch_size} | {r.seq_len} | "
+                f"`{r.case_id}` | — | — | {r.status} |"
+            )
     lines.append("")
-
-    if eg_rows:
-        widest = max(eg_rows, key=lambda t: abs(t[1] - t[2]))
-        lines.append(
-            f"Largest **|Δ top-1 %|** between eager and graph for a matched config: "
-            f"**{abs(widest[1] - widest[2]):.3f}** ({widest[0]})."
-        )
-        lines.append("")
 
 
 def _write_summary(
@@ -429,26 +331,6 @@ def _write_summary(
             f"| {r.model_label} | {mode} | {r.batch_size} | {r.seq_len} | "
             f"{r.status} | {t} | {note} |"
         )
-    lines.append("")
-
-    # Eager vs graph comparison (same model, batch, seq)
-    lines.append("## Eager vs graph (wall time)")
-    lines.append("")
-    keymap: dict[tuple[str, int, int], dict[str, CaseResult]] = defaultdict(dict)
-    for r in results:
-        if r.status != "ok" or r.duration_sec is None:
-            continue
-        k = (r.model_label, r.batch_size, r.seq_len)
-        keymap[k]["eager" if r.eager else "graph"] = r
-    lines.append("| Model | Batch | Seq len | Eager (s) | Graph (s) | Faster |")
-    lines.append("|---|---:|---:|---:|---:|:---|")
-    for (ml, b, sl), m in sorted(keymap.items()):
-        e, g = m.get("eager"), m.get("graph")
-        if not e or not g:
-            continue
-        te, tg = e.duration_sec or 0.0, g.duration_sec or 0.0
-        faster = "eager" if te < tg else "graph" if tg < te else "tie"
-        lines.append(f"| {ml} | {b} | {sl} | {te:.2f} | {tg:.2f} | {faster} |")
     lines.append("")
 
     lines.append("## Top-10 operators by case (from op_statistic.csv)")
@@ -531,21 +413,9 @@ def main() -> None:
     zips_dir = output_root / "zips"
     zips_dir.mkdir(parents=True, exist_ok=True)
 
-    # 9B first, then 0.8B; eager only; (batch, seq) as requested.
-    models: list[tuple[str, str]] = [
-        ("9B", MODEL_9B),
-        ("0.8B", MODEL_0_8B),
-    ]
-    batch_seq_pairs = [
-        (1, 4096),
-        (1, 16384),
-        (32, 16384),
-        (32, 65536),
-    ]
-
     cases: list[tuple[str, str, bool, int, int]] = []
-    for ml, mp in models:
-        for b, sl in batch_seq_pairs:
+    for ml, mp in SWEEP_MODELS:
+        for b, sl in SWEEP_BATCH_SEQ_PAIRS:
             cases.append((ml, mp, True, b, sl))
 
     if args.dry_run:

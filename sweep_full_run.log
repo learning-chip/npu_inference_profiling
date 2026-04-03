@@ -1,0 +1,33 @@
+
+=== qwen35_9B_eager_b1_sl4K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/ --batch-size 1 --seq-len 4096 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_9B_eager_b1_sl4K --enforce-eager
+finish_time_sec=124.743 status=ok returncode=0
+
+=== qwen35_9B_eager_b1_sl16K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/ --batch-size 1 --seq-len 16384 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_9B_eager_b1_sl16K --enforce-eager
+finish_time_sec=129.492 status=ok returncode=0
+
+=== qwen35_9B_eager_b2_sl8K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/ --batch-size 2 --seq-len 8192 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_9B_eager_b2_sl8K --enforce-eager
+finish_time_sec=132.357 status=ok returncode=0
+
+=== qwen35_9B_eager_b16_sl1K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/ --batch-size 16 --seq-len 1024 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_9B_eager_b16_sl1K --enforce-eager
+finish_time_sec=134.834 status=ok returncode=0
+
+=== qwen35_0.8B_eager_b1_sl4K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/ --batch-size 1 --seq-len 4096 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_0.8B_eager_b1_sl4K --enforce-eager
+finish_time_sec=98.809 status=ok returncode=0
+
+=== qwen35_0.8B_eager_b1_sl16K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/ --batch-size 1 --seq-len 16384 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_0.8B_eager_b1_sl16K --enforce-eager
+finish_time_sec=99.918 status=ok returncode=0
+
+=== qwen35_0.8B_eager_b2_sl8K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/ --batch-size 2 --seq-len 8192 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_0.8B_eager_b2_sl8K --enforce-eager
+finish_time_sec=100.755 status=ok returncode=0
+
+=== qwen35_0.8B_eager_b16_sl1K ===
+/usr/local/python3.11.14/bin/python3 /workdir/npu_inference_profiling/profile_qwen35_prefill.py --model /scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/ --batch-size 16 --seq-len 1024 --profile-dir /workdir/npu_inference_profiling/profile_sweep_runs/qwen35_0.8B_eager_b16_sl1K --enforce-eager
+finish_time_sec=100.847 status=ok returncode=0
+Wrote /workdir/npu_inference_profiling/qwen35_profile_summary.md
