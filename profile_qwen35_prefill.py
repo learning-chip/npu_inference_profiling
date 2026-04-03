@@ -67,6 +67,20 @@ def main() -> None:
         help="Eager mode (default): no CUDA graph / compilation. "
         "Use --no-enforce-eager for graph/compiled mode.",
     )
+    parser.add_argument(
+        "--max-num-batched-tokens",
+        type=int,
+        default=None,
+        help="Scheduler token budget per engine step. If unset, set to at least "
+        "batch_size * seq_len (+ decode budget) so prefill is one batched pass "
+        "(default vLLM ~8192 otherwise causes many small steps and ~batch× kernel launches).",
+    )
+    parser.add_argument(
+        "--max-num-seqs",
+        type=int,
+        default=None,
+        help="Max concurrent sequences. If unset, uses max(batch_size, 256).",
+    )
     args = parser.parse_args()
 
     profile_root = args.profile_dir
@@ -77,6 +91,24 @@ def main() -> None:
     # Context must cover prompt + generation.
     max_model_len = max(args.seq_len + args.max_tokens + 8, 4096)
 
+    # vLLM defaults (e.g. max_num_batched_tokens=8192) cap how many tokens can be
+    # scheduled together. Below that limit, the engine chunks prefill and/or runs
+    # fewer sequences per step — kernel Count in op_statistic.csv then scales with
+    # batch_size. Size these from the actual prompt batch (see vLLM #2492).
+    prefill_tokens = args.batch_size * args.seq_len
+    decode_budget = args.batch_size * args.max_tokens
+    max_num_batched_tokens = args.max_num_batched_tokens
+    if max_num_batched_tokens is None:
+        max_num_batched_tokens = prefill_tokens + decode_budget + 1024
+    max_num_seqs = args.max_num_seqs if args.max_num_seqs is not None else max(args.batch_size, 256)
+
+    print(
+        f"Scheduler: max_num_batched_tokens={max_num_batched_tokens}, "
+        f"max_num_seqs={max_num_seqs} (prefill_tokens={prefill_tokens}, "
+        f"decode_budget={decode_budget})",
+        flush=True,
+    )
+
     llm = LLM(
         model=args.model,
         trust_remote_code=True,
@@ -84,6 +116,8 @@ def main() -> None:
         max_model_len=max_model_len,
         tensor_parallel_size=1,
         enforce_eager=args.enforce_eager,
+        max_num_batched_tokens=max_num_batched_tokens,
+        max_num_seqs=max_num_seqs,
         profiler_config=_prefill_profiler_config(profile_root),
     )
 
