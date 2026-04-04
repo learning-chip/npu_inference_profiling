@@ -36,6 +36,32 @@ python3 bench_gdn_forward_random.py --variant 9B   --shapes 1x8192 4x8192 1x1638
 
 Optional: `--verbose-logs` on either script for full vLLM INFO logs (default is quieter).
 
+## Torch profiler (`bench_gdn_forward_random.py` only)
+
+End-to-end prefill profiling with the full vLLM engine + real weights is documented in
+[`../qwen35_prefill/profile_qwen35_prefill.py`](../qwen35_prefill/profile_qwen35_prefill.py)
+(vLLM `ProfilerConfig`, `llm.start_profile()` / `llm.stop_profile()`, Chrome trace under
+`*_ascend_pt/ASCEND_PROFILER_OUTPUT/trace_view.json`).
+
+For the **single GDN layer** random-weights benchmark, use Ascend’s **`torch_npu.profiler`**
+(aligned with `vllm_ascend.worker.worker._create_profiler`: CPU + NPU activities,
+`tensorboard_trace_handler`, optional Python stacks via `--profile-with-stack`).
+
+```bash
+# Profile the first `--shapes` entry only (default); writes ./gdn_random_torch_profile/ and zips it
+python3 bench_gdn_forward_random.py --variant 0.8B --device 0 --shapes 1x4096 --profile
+
+# Custom output dir and include every shape in one trace
+python3 bench_gdn_forward_random.py --variant 0.8B --shapes 1x4096 4x4096 \
+  --profile --profile-dir ./my_gdn_trace --profile-shapes all
+
+# Large stacks / memory (slower)
+python3 bench_gdn_forward_random.py --variant 0.8B --shapes 1x4096 --profile \
+  --profile-with-stack --profile-memory
+```
+
+After the run, open the printed `trace_view.json` in **MindStudio Insight** or **chrome://tracing**, or download the generated **`gdn_random_torch_profile_<timestamp>.zip`** next to `--profile-dir`. Use `--profile-skip-zip` to keep only the directory. A short `sleep(5)` after `profiler.stop()` matches `profile_qwen35_prefill.py` so worker threads can flush.
+
 ## Reference output (illustrative)
 
 Captured in **`quay.io/ascend/vllm-ascend:v0.18.0rc1`** on a **910B2** NPU, **`bfloat16`**, layer **0**. Default-shape tables use **`--warmup 2 --repeats 7`**, shapes **`1x4096 4x4096 8x2048`**. Larger-shape rows use **`--warmup 2 --repeats 5`**. Your median ms and derived TFLOP/s / GiB/s will differ by chip, driver, and load.

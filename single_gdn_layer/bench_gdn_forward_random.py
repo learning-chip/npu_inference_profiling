@@ -15,6 +15,10 @@ can build ``VllmConfig`` (same as the real benchmark). No model weights are read
 
 Compare against ``bench_gdn_forward.py`` (real weights) on the same ``--shapes``;
 median latency should match within run-to-run variance.
+
+**Profiling:** pass ``--profile`` to capture an Ascend ``torch_npu`` trace (same family of
+API as ``qwen35_prefill/profile_qwen35_prefill.py`` / vLLM worker: CPU+NPU activities,
+tensorboard_trace_handler output under ``--profile-dir``, then a ``.zip`` of that tree).
 """
 
 from __future__ import annotations
@@ -22,10 +26,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import statistics
 import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -245,6 +251,65 @@ def _randomize_gdn_layer(layer: torch.nn.Module, initializer_range: float, seed:
             torch.nn.init.normal_(p, mean=0.0, std=initializer_range)
 
 
+def _create_ascend_torch_profiler(
+    profile_dir: Path,
+    worker_name: str,
+    *,
+    with_stack: bool,
+    with_memory: bool = False,
+):
+    """Ascend ``torch_npu.profiler`` setup aligned with ``vllm_ascend.worker.worker._create_profiler``."""
+    import torch_npu
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    experimental_config = torch_npu.profiler._ExperimentalConfig(
+        export_type=torch_npu.profiler.ExportType.Text,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+        msprof_tx=False,
+        aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+        l2_cache=False,
+        op_attr=False,
+        data_simplification=True,
+        record_op_args=False,
+        gc_detect_threshold=None,
+    )
+    return torch_npu.profiler.profile(
+        activities=[
+            torch_npu.profiler.ProfilerActivity.CPU,
+            torch_npu.profiler.ProfilerActivity.NPU,
+        ],
+        with_stack=False,
+        profile_memory=with_memory,
+        with_modules=with_stack,
+        experimental_config=experimental_config,
+        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
+            str(profile_dir.resolve()),
+            worker_name=worker_name,
+        ),
+    )
+
+
+def _find_latest_ascend_chrome_trace(profile_dir: Path) -> Path | None:
+    """Same layout as ``qwen35_prefill/profile_qwen35_prefill.py`` (MindStudio / chrome://tracing)."""
+    trace_paths = sorted(
+        profile_dir.glob("*_ascend_pt/ASCEND_PROFILER_OUTPUT/trace_view.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return trace_paths[0] if trace_paths else None
+
+
+def _zip_profile_tree(profile_dir: Path) -> Path:
+    """Zip ``profile_dir`` for download; returns path to the ``.zip`` file."""
+    profile_dir = profile_dir.resolve()
+    if not profile_dir.is_dir():
+        raise FileNotFoundError(profile_dir)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    zip_base = profile_dir.parent / f"{profile_dir.name}_{stamp}"
+    archive_path = shutil.make_archive(str(zip_base), "zip", root_dir=str(profile_dir))
+    return Path(archive_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -269,6 +334,50 @@ def main() -> None:
         "--verbose-logs",
         action="store_true",
         help="If set, do not force VLLM_LOGGING_LEVEL=ERROR",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="After timing, capture Ascend torch_npu profiler trace (see --profile-dir).",
+    )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent / "gdn_random_torch_profile",
+        help="Directory for torch_npu tensorboard_trace_handler output (created if missing).",
+    )
+    parser.add_argument(
+        "--profile-worker-name",
+        type=str,
+        default="gdn_random_forward",
+        help="Worker name passed to tensorboard_trace_handler (trace subfolder name).",
+    )
+    parser.add_argument(
+        "--profile-with-stack",
+        action="store_true",
+        help="Enable with_modules (Python stacks); slower, same idea as vLLM torch_profiler_with_stack.",
+    )
+    parser.add_argument(
+        "--profile-memory",
+        action="store_true",
+        help="Enable profiler memory tracking (torch_npu profile_memory).",
+    )
+    parser.add_argument(
+        "--profile-shapes",
+        choices=["first", "all"],
+        default="first",
+        help="Which --shapes entries to include in the profiled region (default: first only).",
+    )
+    parser.add_argument(
+        "--profile-warmup",
+        type=int,
+        default=3,
+        help="Warmup forwards immediately before starting the profiler (JIT/Triton).",
+    )
+    parser.add_argument(
+        "--profile-skip-zip",
+        action="store_true",
+        help="Do not create a .zip of --profile-dir after profiling.",
     )
     args = parser.parse_args()
 
@@ -308,6 +417,7 @@ def main() -> None:
         from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
         from vllm.forward_context import set_forward_context
         from vllm.model_executor.models.qwen3_5 import Qwen3_5GatedDeltaNet
+        from vllm.v1.attention.backend import CommonAttentionMetadata
         from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadataBuilder
 
         dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
@@ -345,13 +455,10 @@ def main() -> None:
         )
 
         shapes = _parse_shapes(args.shapes)
-        print(
-            f"[random weights] variant={args.variant} | npu:{args.device} | "
-            f"prefix={layer.prefix!r} | seed={args.seed} | warmup={args.warmup} repeats={args.repeats}",
-            flush=True,
-        )
+        hidden_size = hf_text.hidden_size
 
-        for batch, seq_len in shapes:
+        def forward_shape(batch: int, seq_len: int) -> None:
+            """One GDN prefill forward (random activations deterministic in ``seed``)."""
             num_tokens = batch * seq_len
             query_lens = torch.tensor([seq_len] * batch, dtype=torch.int32, device="cpu")
             q_cpu = torch.zeros(batch + 1, dtype=torch.int32, device="cpu")
@@ -359,8 +466,6 @@ def main() -> None:
             q = q_cpu.to(device=device, non_blocking=True)
             seq_lens = query_lens.to(device=device, non_blocking=True)
             block_table = torch.arange(batch, dtype=torch.int32, device=device).unsqueeze(1)
-
-            from vllm.v1.attention.backend import CommonAttentionMetadata
 
             common = CommonAttentionMetadata(
                 query_start_loc=q,
@@ -377,7 +482,6 @@ def main() -> None:
             meta = builder.build(common_prefix_len=0, common_attn_metadata=common)
             attn_dict = {layer.prefix: meta}
 
-            hidden_size = hf_text.hidden_size
             torch.manual_seed(args.seed + num_tokens)
             hidden_states = (
                 torch.randn(num_tokens, hidden_size, device=device, dtype=dtype)
@@ -386,17 +490,27 @@ def main() -> None:
 
             out_buf = torch.empty(num_tokens, hidden_size, device=device, dtype=dtype)
 
+            with set_forward_context(attn_dict, vllm_config, num_tokens=num_tokens):
+                layer.forward(hidden_states, out_buf)
+
+        print(
+            f"[random weights] variant={args.variant} | npu:{args.device} | "
+            f"prefix={layer.prefix!r} | seed={args.seed} | warmup={args.warmup} repeats={args.repeats}",
+            flush=True,
+        )
+
+        for batch, seq_len in shapes:
+            num_tokens = batch * seq_len
+
             for _ in range(args.warmup):
-                with set_forward_context(attn_dict, vllm_config, num_tokens=num_tokens):
-                    layer.forward(hidden_states, out_buf)
+                forward_shape(batch, seq_len)
             torch.npu.synchronize()
 
             times_ms: list[float] = []
             for _ in range(args.repeats):
                 torch.npu.synchronize()
                 t0 = time.perf_counter()
-                with set_forward_context(attn_dict, vllm_config, num_tokens=num_tokens):
-                    layer.forward(hidden_states, out_buf)
+                forward_shape(batch, seq_len)
                 torch.npu.synchronize()
                 times_ms.append((time.perf_counter() - t0) * 1000.0)
 
@@ -410,6 +524,59 @@ def main() -> None:
                 f"median {lat*1000:.3f} ms | ~{tflops:.2f} TFLOP/s (GEMM+proxy) | ~{gib_s:.2f} GiB/s",
                 flush=True,
             )
+
+        if args.profile:
+            profile_shapes = shapes if args.profile_shapes == "all" else shapes[:1]
+            prof_dir = args.profile_dir
+            print(
+                f"[profile] Ascend torch_npu profiler → {prof_dir.resolve()} | "
+                f"shapes={profile_shapes} | worker={args.profile_worker_name!r}",
+                flush=True,
+            )
+            # Clean KV for a deterministic trace (timing runs left cache dirty).
+            conv_state.zero_()
+            ssm_state.zero_()
+
+            for _ in range(args.profile_warmup):
+                for b, t in profile_shapes:
+                    forward_shape(b, t)
+                torch.npu.synchronize()
+
+            profiler = _create_ascend_torch_profiler(
+                prof_dir,
+                args.profile_worker_name,
+                with_stack=args.profile_with_stack,
+                with_memory=args.profile_memory,
+            )
+            profiler.start()
+            try:
+                for b, t in profile_shapes:
+                    forward_shape(b, t)
+                    torch.npu.synchronize()
+            finally:
+                torch.npu.synchronize()
+                profiler.stop()
+            torch.npu.synchronize()
+            # Allow Ascend profiler worker to flush (see profile_qwen35_prefill.py).
+            time.sleep(5)
+
+            trace = _find_latest_ascend_chrome_trace(prof_dir)
+            if trace is None:
+                print(
+                    f"[profile] WARNING: no trace_view.json under {prof_dir}/*_ascend_pt/... "
+                    "Profiling may have failed; check NPU logs.",
+                    flush=True,
+                )
+            else:
+                sz = trace.stat().st_size
+                print(
+                    f"[profile] Chrome trace (MindStudio Insight / chrome://tracing): {trace} ({sz} bytes)",
+                    flush=True,
+                )
+
+            if not args.profile_skip_zip:
+                zpath = _zip_profile_tree(prof_dir)
+                print(f"[profile] Zipped archive for download: {zpath}", flush=True)
 
         destroy_model_parallel()
         destroy_distributed_environment()
