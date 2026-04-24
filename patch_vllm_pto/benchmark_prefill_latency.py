@@ -2,17 +2,18 @@
 """TTFT (time-to-first-token) prefill-oriented latency for Qwen3.5 (vLLM-Ascend):
 Triton vs PTO stages vs PTO megakernel.
 
-Run each ``--case`` in a **fresh** interpreter so env and JIT state stay isolated::
+Use a **fresh** interpreter per ``--case`` (and per model) so env and JIT stay
+isolated between backends. Pass **multiple** ``--seq-len`` values to load vLLM
+once and sweep lengths in-process (saves slow init; see
+``run_benchmark_prefill_three_way.sh``)::
 
     export ASCEND_RT_VISIBLE_DEVICES=0
-    python3 benchmark_prefill_latency.py --case triton --seq-len 4096
-    python3 benchmark_prefill_latency.py --case pto --seq-len 4096
-    python3 benchmark_prefill_latency.py --case pto_mega --seq-len 4096
+    python3 benchmark_prefill_latency.py --case triton --seq-len 512 1024 4096
+    python3 benchmark_prefill_latency.py --case pto --seq-len 512 1024 4096
 
-Emits one JSON object per invocation on stdout. Use ``--output-jsonl PATH`` to
-append the same line to a file (newline-delimited JSON) for comparing runs.
-``run_benchmark_prefill_three_way.sh`` passes a different ``PATH`` per case
-(e.g. ``OUT_DIR/triton.jsonl``) so each case’s JSONL stays separate.
+Emits one JSON object per ``--seq-len`` on stdout. Use ``--output-jsonl PATH``
+to append each line (JSONL). ``run_benchmark_prefill_three_way.sh`` uses one
+``PATH`` per case (e.g. ``OUT_DIR/triton.jsonl``).
 
 Latency is **TTFT** (time to
 first token), taken from ``RequestOutput.metrics.first_token_latency`` seconds
@@ -58,7 +59,14 @@ def main() -> int:
         "--model",
         default="/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/",
     )
-    p.add_argument("--seq-len", type=int, default=4096)
+    p.add_argument(
+        "--seq-len",
+        type=int,
+        nargs="+",
+        default=[4096],
+        metavar="N",
+        help="One or more prompt lengths; one LLM load, then sweep in order.",
+    )
     p.add_argument("--device", default="0", help="ASCEND_RT_VISIBLE_DEVICES (single NPU index)")
     p.add_argument("--warmup", type=int, default=2)
     p.add_argument("--repeats", type=int, default=10)
@@ -77,17 +85,21 @@ def main() -> int:
     from vllm import LLM, SamplingParams
     from vllm.outputs import RequestOutput
 
+    seq_lens: list[int] = list(args.seq_len)
+    max_sl = max(seq_lens)
+
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     seed = "The quick brown fox jumps over the lazy dog. "
-    ids: list[int] = []
-    while len(ids) < args.seq_len:
-        ids.extend(tok.encode(seed, add_special_tokens=False))
-    ids = ids[: args.seq_len]
-    prompt = tok.decode(ids)
-    prompts = [prompt]
 
-    max_model_len = max(args.seq_len + args.max_tokens + 32, 4096)
-    prefill_tokens = args.seq_len + args.max_tokens + 256
+    def _prompt_for_seq_len(seq_len: int) -> list[str]:
+        ids: list[int] = []
+        while len(ids) < seq_len:
+            ids.extend(tok.encode(seed, add_special_tokens=False))
+        ids = ids[:seq_len]
+        return [tok.decode(ids)]
+
+    max_model_len = max(max_sl + args.max_tokens + 32, 4096)
+    prefill_tokens = max_sl + args.max_tokens + 256
 
     llm = LLM(
         model=args.model,
@@ -123,40 +135,45 @@ def main() -> int:
             )
         return float(ttft)
 
-    for _ in range(args.warmup):
-        llm.generate(prompts, sp, use_tqdm=False)
-
-    ttfts_s: list[float] = []
-    for _ in range(args.repeats):
-        outs = llm.generate(prompts, sp, use_tqdm=False)
-        if len(outs) != 1:
-            raise RuntimeError(f"expected one RequestOutput, got {len(outs)}")
-        ttfts_s.append(_ttft_s(outs[0]))
-
-    ttfts_ms = [t * 1000.0 for t in ttfts_s]
-    mean_ttft_ms = statistics.mean(ttfts_ms)
-    median_ttft_ms = statistics.median(ttfts_ms)
-    std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
-    out = {
-        "case": args.case,
-        "seq_len": args.seq_len,
-        "warmup": args.warmup,
-        "repeats": args.repeats,
-        "mean_ttft_ms": mean_ttft_ms,
-        "median_ttft_ms": median_ttft_ms,
-        "std_ttft_ms": std_ttft_ms,
-        "ttfts_ms": ttfts_ms,
-        "mean_ms": mean_ttft_ms,
-        "std_ms": std_ttft_ms,
-        "times_ms": ttfts_ms,
-    }
-    line = json.dumps(out)
-    print(line, flush=True)
-    if args.output_jsonl:
-        out_path = Path(args.output_jsonl)
+    out_path = Path(args.output_jsonl) if args.output_jsonl else None
+    if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+
+    for seq_len in seq_lens:
+        prompts = _prompt_for_seq_len(seq_len)
+
+        for _ in range(args.warmup):
+            llm.generate(prompts, sp, use_tqdm=False)
+
+        ttfts_s: list[float] = []
+        for _ in range(args.repeats):
+            outs = llm.generate(prompts, sp, use_tqdm=False)
+            if len(outs) != 1:
+                raise RuntimeError(f"expected one RequestOutput, got {len(outs)}")
+            ttfts_s.append(_ttft_s(outs[0]))
+
+        ttfts_ms = [t * 1000.0 for t in ttfts_s]
+        mean_ttft_ms = statistics.mean(ttfts_ms)
+        median_ttft_ms = statistics.median(ttfts_ms)
+        std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
+        out = {
+            "case": args.case,
+            "seq_len": seq_len,
+            "warmup": args.warmup,
+            "repeats": args.repeats,
+            "mean_ttft_ms": mean_ttft_ms,
+            "median_ttft_ms": median_ttft_ms,
+            "std_ttft_ms": std_ttft_ms,
+            "ttfts_ms": ttfts_ms,
+            "mean_ms": mean_ttft_ms,
+            "std_ms": std_ttft_ms,
+            "times_ms": ttfts_ms,
+        }
+        line = json.dumps(out)
+        print(line, flush=True)
+        if out_path is not None:
+            with out_path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
     return 0
 
 
