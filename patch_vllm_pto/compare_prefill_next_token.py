@@ -20,9 +20,9 @@ and checks ``fla.ops.chunk_gated_delta_rule`` for
 Examples::
 
     export ASCEND_RT_VISIBLE_DEVICES=0
-    python3 compare_prefill_next_token.py record --backend triton --output /tmp/tri.npz
-    python3 compare_prefill_next_token.py record --backend pto --output /tmp/pto.npz
-    python3 compare_prefill_next_token.py compare /tmp/tri.npz /tmp/pto.npz
+    python3 compare_prefill_next_token.py record --backend triton --output ./tmp/tri.npz
+    python3 compare_prefill_next_token.py record --backend pto --output ./tmp/pto.npz
+    python3 compare_prefill_next_token.py compare ./tmp/tri.npz ./tmp/pto.npz
 
 Or::
 
