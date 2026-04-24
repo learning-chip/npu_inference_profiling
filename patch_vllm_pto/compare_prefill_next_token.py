@@ -114,7 +114,7 @@ def _verify_chunk_backend() -> None:
             "Triton baseline record: PTO wrapper is still installed on "
             "`fla.ops.chunk_gated_delta_rule` — strip VLLM_PTO* from the environment."
         )
-    if want not in ("pto", "triton"):
+    if want not in ("pto", "triton", "pto_mega"):
         raise RuntimeError(f"internal: invalid _CMP_BACKEND={want!r}")
 
 
