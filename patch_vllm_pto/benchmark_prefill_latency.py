@@ -12,8 +12,9 @@ once and sweep lengths in-process (saves slow init; see
     python3 benchmark_prefill_latency.py --case pto --seq-len 512 1024 4096
 
 Emits one JSON object per ``--seq-len`` on stdout. Use ``--output-jsonl PATH``
-to append each line (JSONL). ``run_benchmark_prefill_three_way.sh`` uses one
-``PATH`` per case (e.g. ``OUT_DIR/triton.jsonl``).
+to append each line (JSONL). ``run_benchmark_prefill_three_way.sh`` writes under
+``OUT_DIR/<model_label>/`` (e.g. ``…/0.8B/triton.jsonl``) with ``model`` and
+``model_label`` fields on each line.
 
 Latency is **TTFT** (time to
 first token), taken from ``RequestOutput.metrics.first_token_latency`` seconds
@@ -32,10 +33,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 from pathlib import Path
 
 _PATCH = Path(__file__).resolve().parent
+
+
+def _infer_model_label(model_path: str) -> str:
+    """Best-effort size tag from HF-style path (e.g. ``…Qwen3.5-0.8B…`` → ``0.8B``)."""
+    m = re.search(r"Qwen3\.5-(\d+(?:\.\d+)?)B", model_path, flags=re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}B"
+    m2 = re.search(r"-(\d+(?:\.\d+)?)B(?:/|$)", model_path)
+    if m2:
+        return f"{m2.group(1)}B"
+    return "unknown"
 
 
 def _apply_case_env(case: str, device: str) -> None:
@@ -64,6 +77,12 @@ def main() -> int:
         default="/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/",
     )
     p.add_argument(
+        "--model-label",
+        default=None,
+        metavar="TAG",
+        help="Short label for JSON/JSONL (e.g. 0.8B, 9B). Default: infer from --model path.",
+    )
+    p.add_argument(
         "--seq-len",
         type=int,
         nargs="+",
@@ -82,6 +101,7 @@ def main() -> int:
         help="Append this run's JSON object as one line (JSONL) for cross-run comparison.",
     )
     args = p.parse_args()
+    model_label = (args.model_label or "").strip() or _infer_model_label(args.model)
 
     _apply_case_env(args.case, args.device)
 
@@ -163,6 +183,8 @@ def main() -> int:
         std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
         out = {
             "case": args.case,
+            "model": args.model,
+            "model_label": model_label,
             "seq_len": seq_len,
             "warmup": args.warmup,
             "repeats": args.repeats,
