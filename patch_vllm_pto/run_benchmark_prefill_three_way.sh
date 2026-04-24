@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compare Qwen3.5 prefill wall time: Triton vs PTO per-stage vs PTO megakernel.
+# Compare Qwen3.5 prefill TTFT: Triton vs PTO per-stage vs PTO megakernel.
 #
 #   export ASCEND_RT_VISIBLE_DEVICES=0
 #   ./run_benchmark_prefill_three_way.sh
@@ -24,7 +24,7 @@ for S in $SEQ_LENS; do
   for C in triton pto pto_mega; do
     echo "[bench] seq_len=$S case=$C" | tee -a "$OUT.runlog"
     python3 "$PY" --case "$C" --seq-len "$S" --warmup "$WARMUP" --repeats "$REPEATS" --model "$MODEL" \
-      --device "$ASCEND_RT_VISIBLE_DEVICES" | tee -a "$OUT"
+      --device "$ASCEND_RT_VISIBLE_DEVICES" --output-jsonl "$OUT"
   done
 done
 

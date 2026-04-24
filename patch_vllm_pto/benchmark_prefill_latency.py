@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Wall-clock prefill latency for Qwen3.5 (vLLM-Ascend): Triton vs PTO stages vs PTO megakernel.
+"""TTFT (time-to-first-token) prefill-oriented latency for Qwen3.5 (vLLM-Ascend):
+Triton vs PTO stages vs PTO megakernel.
 
 Run each ``--case`` in a **fresh** interpreter so env and JIT state stay isolated::
 
@@ -8,10 +9,16 @@ Run each ``--case`` in a **fresh** interpreter so env and JIT state stay isolate
     python3 benchmark_prefill_latency.py --case pto --seq-len 4096
     python3 benchmark_prefill_latency.py --case pto_mega --seq-len 4096
 
-Emits one JSON object per invocation (mean_ms, std_ms, …) on stdout.
+Emits one JSON object per invocation on stdout. Use ``--output-jsonl PATH`` to
+append the same line to a file (newline-delimited JSON) for comparing runs.
 
-Timing is wall-clock around blocking ``LLM.generate()`` (vLLM runs NPU work in
-worker processes; driver-side ``torch.npu.synchronize()`` does not wait on them).
+Latency is **TTFT** (time to
+first token), taken from ``RequestOutput.metrics.first_token_latency`` seconds
+— the same notion as ``mean_ttft_ms`` in ``vllm/benchmarks/serve.py`` (prefill +
+queue to first generated token), not end-to-end ``generate()`` wall time.
+
+``mean_ms`` / ``std_ms`` / ``times_ms`` duplicate the TTFT stats for backward
+compatibility with simple parsers.
 """
 from __future__ import annotations
 
@@ -19,7 +26,6 @@ import argparse
 import json
 import os
 import statistics
-import time
 from pathlib import Path
 
 _PATCH = Path(__file__).resolve().parent
@@ -55,12 +61,19 @@ def main() -> int:
     p.add_argument("--warmup", type=int, default=2)
     p.add_argument("--repeats", type=int, default=10)
     p.add_argument("--max-tokens", type=int, default=1, help="Keep small so timing is prefill-dominated.")
+    p.add_argument(
+        "--output-jsonl",
+        metavar="PATH",
+        default=None,
+        help="Append this run's JSON object as one line (JSONL) for cross-run comparison.",
+    )
     args = p.parse_args()
 
     _apply_case_env(args.case, args.device)
 
     from transformers import AutoTokenizer
     from vllm import LLM, SamplingParams
+    from vllm.outputs import RequestOutput
 
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     seed = "The quick brown fox jumps over the lazy dog. "
@@ -83,6 +96,7 @@ def main() -> int:
         enforce_eager=True,
         max_num_batched_tokens=prefill_tokens,
         max_num_seqs=8,
+        disable_log_stats=False,
     )
     sp = SamplingParams(
         temperature=0.0,
@@ -92,27 +106,55 @@ def main() -> int:
         seed=42,
     )
 
+    def _ttft_s(output: RequestOutput) -> float:
+        m = output.metrics
+        if m is None:
+            raise RuntimeError(
+                "RequestOutput.metrics is None; TTFT requires disable_log_stats=False "
+                "(the default) on LLM()."
+            )
+        ttft = getattr(m, "first_token_latency", None)
+        if ttft is None:
+            raise RuntimeError(
+                "metrics.first_token_latency missing; use a vLLM build that "
+                "populates RequestStateStats on RequestOutput (v1 engine)."
+            )
+        return float(ttft)
+
     for _ in range(args.warmup):
-        llm.generate(prompts, sp)
+        llm.generate(prompts, sp, use_tqdm=False)
 
-    times_s: list[float] = []
+    ttfts_s: list[float] = []
     for _ in range(args.repeats):
-        t0 = time.perf_counter()
-        llm.generate(prompts, sp)
-        times_s.append(time.perf_counter() - t0)
+        outs = llm.generate(prompts, sp, use_tqdm=False)
+        if len(outs) != 1:
+            raise RuntimeError(f"expected one RequestOutput, got {len(outs)}")
+        ttfts_s.append(_ttft_s(outs[0]))
 
-    mean_ms = statistics.mean(times_s) * 1000.0
-    std_ms = statistics.pstdev(times_s) * 1000.0 if len(times_s) > 1 else 0.0
+    ttfts_ms = [t * 1000.0 for t in ttfts_s]
+    mean_ttft_ms = statistics.mean(ttfts_ms)
+    median_ttft_ms = statistics.median(ttfts_ms)
+    std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
     out = {
         "case": args.case,
         "seq_len": args.seq_len,
         "warmup": args.warmup,
         "repeats": args.repeats,
-        "mean_ms": mean_ms,
-        "std_ms": std_ms,
-        "times_ms": [t * 1000.0 for t in times_s],
+        "mean_ttft_ms": mean_ttft_ms,
+        "median_ttft_ms": median_ttft_ms,
+        "std_ttft_ms": std_ttft_ms,
+        "ttfts_ms": ttfts_ms,
+        "mean_ms": mean_ttft_ms,
+        "std_ms": std_ttft_ms,
+        "times_ms": ttfts_ms,
     }
-    print(json.dumps(out), flush=True)
+    line = json.dumps(out)
+    print(line, flush=True)
+    if args.output_jsonl:
+        out_path = Path(args.output_jsonl)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
     return 0
 
 
