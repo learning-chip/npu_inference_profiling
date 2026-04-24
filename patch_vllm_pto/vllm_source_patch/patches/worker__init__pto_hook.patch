@@ -1,0 +1,31 @@
+--- vllm_ascend/patch/worker/__init__.py.orig
++++ vllm_ascend/patch/worker/__init__.py
+@@ -17,9 +17,24 @@
+ from vllm.triton_utils import HAS_TRITON
+ 
+ if HAS_TRITON:
+     import vllm_ascend.patch.worker.patch_triton
+     import vllm_ascend.patch.worker.patch_v2.patch_triton  # noqa
+ 
++    # Out-of-tree PTO swap: MUST run before ``patch_qwen3_next`` / ``patch_qwen3_5`` (and any
++    # patch that does ``from vllm.model_executor.layers.fla.ops import chunk_gated_delta_rule``),
++    # or those modules keep a stale reference to Triton and never call the patched op.
++    try:
++        import os as _pto_os
++        import sys as _pto_sys
++
++        _pto_dir = _pto_os.environ.get("VLLM_PTO_PATCH_DIR")
++        if _pto_dir and _pto_os.path.isdir(_pto_dir):
++            if _pto_dir not in _pto_sys.path:
++                _pto_sys.path.insert(0, _pto_dir)
++            from apply import apply_pto_patch  # type: ignore  # noqa: E402
++
++            apply_pto_patch()
++    except Exception as _pto_exc:
++        import warnings as _pto_warnings
++
++        _pto_warnings.warn(f"VLLM_PTO_PATCH_DIR apply_pto_patch failed: {_pto_exc!r}", stacklevel=1)
++
+ 
+ # isort: off
+ import vllm_ascend.patch.worker.patch_weight_utils  # noqa

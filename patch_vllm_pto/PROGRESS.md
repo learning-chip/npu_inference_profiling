@@ -50,6 +50,7 @@ python3 npu_inference_profiling/qwen35_prefill/profile_qwen35_prefill.py --pto -
 | `pto_chunk_gated_delta_rule.py` | PTO forward + fallbacks + profiler scopes. |
 | `compare_triton_pto_chunk.py` | Direct op comparison (needs forward context stub). |
 | `compare_prefill_next_token.py` | Two-subprocess greedy-token parity on Qwen3.5-0.8B. |
+| `vllm_source_patch/README.md` | **In-package** vllm-ascend edit (worker `__init__.py` hook order); `apply_vllm_ascend_pto_hook.py` for fresh installs. |
 
 ## Known gaps
 
