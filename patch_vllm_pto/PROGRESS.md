@@ -8,7 +8,7 @@ Replace the six Triton FLA kernels in `chunk_gated_delta_rule_fwd` (see `vllm_as
 
 - **Wrapper**: `pto_chunk_gated_delta_rule.py` exposes the same API as `vllm_ascend.ops.triton.fla.chunk.chunk_gated_delta_rule`, delegating to PTO when safe and to Triton otherwise.
 - **Monkey-patch target**: `vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule` (already redirected to Ascend Triton by `patch_triton.py`).
-- **Worker import hook**: `VLLM_PTO_PATCH_DIR` must point at this directory. Installed `vllm_ascend/patch/worker/__init__.py` appends a small block that `import apply; apply_pto_patch()` after the stock Triton patch so **spawned engine workers** load the PTO wrapper. The same hook exists in the workspace copy under `/workdir/vllm-ascend/…` for source installs.
+- **Worker import hook**: `VLLM_PTO_PATCH_DIR` must point at this directory. Installed `vllm_ascend/patch/worker/__init__.py` calls `apply_pto_patch()` **immediately after** `patch_triton` (inside the `HAS_TRITON` block) and **before** `patch_qwen3_next` / `patch_qwen3_5`. Those modules do `from vllm.model_executor.layers.fla.ops import chunk_gated_delta_rule` at import time; if the PTO patch ran only at the end of `__init__.py`, they would keep a **stale** reference to Triton and the trace would still show `chunk_gated_delta_rule_fwd` even though `fla.ops.chunk_gated_delta_rule` was patched later. The same hook exists in `/workdir/vllm-ascend/…` for source installs.
 - **Chunk size**: PTO chain uses **C=128**; Triton uses C=64. Numerical agreement is validated against Triton on the same tensors (see below).
 
 ## Fallbacks (Triton path)
@@ -27,7 +27,7 @@ Replace the six Triton FLA kernels in `chunk_gated_delta_rule_fwd` (see `vllm_as
 | Check | Command / note | Result |
 |--------|------------------|--------|
 | Op-level Triton vs PTO | `python3 compare_triton_pto_chunk.py --device npu:4 --T 256` (+ forward context + PCP mock in-script) | `max_abs` on `o` ~5e-4, `final_state` RMSE small — **PASS** |
-| Greedy decode + first-step logprobs E2E | `python3 compare_prefill_next_token.py --device 4 --seq-len 128 --num-generated 11` | 11 token IDs identical; full-vocab first-step logprobs `max_abs=0` — **PASS** |
+| Greedy decode + first-step logprobs E2E | `python3 compare_prefill_next_token.py --device 4 --seq-len 128 --num-generated 11` | Subprocess env strips all ``VLLM_PTO*`` for baseline; child asserts ``_vllm_pto_chunk_wrapper_installed`` on ``fla.ops.chunk_gated_delta_rule`` (PTO vs Triton-only). 11 token IDs identical; full-vocab first-step logprobs `max_abs=0` — **PASS** |
 | Profile + patch | `ASCEND_RT_VISIBLE_DEVICES=4 VLLM_PTO_PATCH_DIR=… python3 …/profile_qwen35_prefill.py …` | Engine log: “PTO chunk_gated_delta_rule patch is active”; trace written under `--profile-dir` |
 
 ## Usage

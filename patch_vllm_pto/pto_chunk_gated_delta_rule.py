@@ -383,4 +383,6 @@ def bind_triton(_triton_impl):
 
     _bound.__name__ = "chunk_gated_delta_rule"
     _bound.__doc__ = chunk_gated_delta_rule_pto.__doc__
+    # Introspection hook for tests / compare scripts (Ascend Triton op has no such attr).
+    _bound._vllm_pto_chunk_wrapper_installed = True
     return _bound

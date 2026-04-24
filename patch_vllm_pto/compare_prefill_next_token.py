@@ -13,6 +13,13 @@ Requires a large ``LLM(..., max_logprobs=…)`` (default 300000) so full-vocab
 logprobs are not clipped by the engine (default cap is 20).
 
 Each backend runs in a separate subprocess so patches do not cross-contaminate.
+
+**Backend guard:** the child forces ``vllm_ascend.utils.adapt_patch`` then checks
+``vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule`` for the marker
+``_vllm_pto_chunk_wrapper_installed`` (set only by ``apply_pto_patch`` / ``bind_triton``).
+The Triton baseline uses an environment with **all** ``VLLM_PTO*`` keys and
+``VLLM_USE_PTO_CHUNK`` stripped so a parent shell cannot accidentally enable PTO
+for both runs.
 """
 from __future__ import annotations
 
@@ -27,6 +34,50 @@ from pathlib import Path
 import numpy as np
 
 _PATCH = Path(__file__).resolve().parent
+
+
+def _child_env_for_backend(with_pto: bool, artifact: str, base_env: dict[str, str]) -> dict[str, str]:
+    """Build subprocess env: baseline drops every ``VLLM_PTO*`` key so we never compare two Triton runs."""
+    env: dict[str, str] = {}
+    for k, v in base_env.items():
+        if k.startswith("VLLM_PTO"):
+            continue
+        env[k] = v
+    env.pop("VLLM_USE_PTO_CHUNK", None)
+    env["_CMP_ARTIFACT"] = artifact
+    if with_pto:
+        env["VLLM_PTO_PATCH_DIR"] = str(_PATCH)
+        env["_CMP_BACKEND"] = "pto"
+    else:
+        env.pop("VLLM_PTO_PATCH_DIR", None)
+        env["_CMP_BACKEND"] = "triton"
+    return env
+
+
+def _verify_chunk_backend() -> None:
+    """Ensure ``fla.ops.chunk_gated_delta_rule`` matches this subprocess role (PTO wrapper vs Triton-only)."""
+    import vllm.model_executor.layers.fla.ops as fla_ops
+    import vllm_ascend.utils as vua
+
+    vua.adapt_patch(is_global_patch=False)
+    want = os.environ.get("_CMP_BACKEND", "").lower().strip()
+    fn = fla_ops.chunk_gated_delta_rule
+    wrapped = bool(getattr(fn, "_vllm_pto_chunk_wrapper_installed", False))
+    if want == "pto" and not wrapped:
+        raise RuntimeError(
+            "PTO subprocess: expected ``apply_pto_patch`` wrapper on "
+            "`vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule` "
+            f"(missing _vllm_pto_chunk_wrapper_installed; got {fn!r}). "
+            "Check VLLM_PTO_PATCH_DIR and vllm_ascend worker import order."
+        )
+    if want == "triton" and wrapped:
+        raise RuntimeError(
+            "Triton baseline subprocess: PTO wrapper is still installed on "
+            "`fla.ops.chunk_gated_delta_rule` — baseline env was contaminated "
+            "(e.g. VLLM_PTO_PATCH_DIR leaked). Strip PTO env vars for the baseline run."
+        )
+    if want not in ("pto", "triton"):
+        raise RuntimeError(f"internal: invalid _CMP_BACKEND={want!r}")
 
 
 def _dense_first_step_logprobs(
@@ -47,6 +98,9 @@ def _child_payload() -> None:
     import torch
     from transformers import AutoTokenizer
     from vllm import LLM, SamplingParams
+
+    # After vLLM import path exists; ensures ``adapt_patch`` sees the same stack as ``LLM()``.
+    _verify_chunk_backend()
 
     model = os.environ["_CMP_MODEL"]
     artifact = os.environ["_CMP_ARTIFACT"]
@@ -183,7 +237,7 @@ def main() -> int:
     if args.num_generated < 2:
         p.error("--num-generated must be at least 2 (first token + at least one more).")
 
-    env_base = os.environ.copy()
+    env_base: dict[str, str] = dict(os.environ)
     env_base["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
     env_base["ASCEND_RT_VISIBLE_DEVICES"] = args.device
     env_base["_CMP_MODEL"] = args.model
@@ -198,12 +252,7 @@ def main() -> int:
         fd, path = tempfile.mkstemp(prefix="pto_cmp_", suffix=".npz")
         os.close(fd)
         try:
-            env = env_base.copy()
-            env["_CMP_ARTIFACT"] = path
-            if with_pto:
-                env["VLLM_PTO_PATCH_DIR"] = str(_PATCH)
-            else:
-                env.pop("VLLM_PTO_PATCH_DIR", None)
+            env = _child_env_for_backend(with_pto, path, env_base)
             r = subprocess.run(
                 [sys.executable, script, "--internal-child"],
                 env=env,
