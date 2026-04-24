@@ -183,7 +183,6 @@ def main() -> int:
         std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
         out = {
             "case": args.case,
-            "model": args.model,
             "model_label": model_label,
             "seq_len": seq_len,
             "warmup": args.warmup,
