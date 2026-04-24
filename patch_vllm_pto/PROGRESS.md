@@ -27,7 +27,7 @@ Replace the six Triton FLA kernels in `chunk_gated_delta_rule_fwd` (see `vllm_as
 | Check | Command / note | Result |
 |--------|------------------|--------|
 | Op-level Triton vs PTO | `python3 compare_triton_pto_chunk.py --device npu:4 --T 256` (+ forward context + PCP mock in-script) | `max_abs` on `o` ~5e-4, `final_state` RMSE small — **PASS** |
-| Greedy next token E2E | `python3 compare_prefill_next_token.py --device 4 --seq-len 128` (two subprocesses) | Same `first_token_id` — **PASS** |
+| Greedy decode + first-step logprobs E2E | `python3 compare_prefill_next_token.py --device 4 --seq-len 128 --num-generated 11` | 11 token IDs identical; full-vocab first-step logprobs `max_abs=0` — **PASS** |
 | Profile + patch | `ASCEND_RT_VISIBLE_DEVICES=4 VLLM_PTO_PATCH_DIR=… python3 …/profile_qwen35_prefill.py …` | Engine log: “PTO chunk_gated_delta_rule patch is active”; trace written under `--profile-dir` |
 
 ## Usage
