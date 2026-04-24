@@ -24,9 +24,15 @@ queue to first generated token), not end-to-end ``generate()`` wall time.
 ``mean_ms`` / ``std_ms`` / ``times_ms`` duplicate the TTFT stats for backward
 compatibility with simple parsers.
 
-Each JSON line also includes ``avg_prompt_throughput_tokens_per_s``: the same
-rolling-window value as vLLM's ``Avg prompt throughput`` log
-(``vllm/v1/metrics/loggers.py``), sampled once after the timed repeats.
+Each JSON line includes ``input_tps``: prompt tokens per second from mean TTFT,
+``seq_len / (mean_ttft_ms / 1000)`` (reliable for prefill-heavy single-request
+timing).
+
+``vllm_interval_prompt_throughput_tps`` is the engine's
+``LoggingStatLogger.last_prompt_throughput`` (``Avg prompt throughput`` in
+``vllm/v1/metrics/loggers.py``): a rolling-window value that only updates on
+vLLM's stats log interval, so it is often ``null`` or ``0.0`` for short sweeps
+and is included only for comparison with engine logs.
 
 Prefix caching (APC) is forced **off** via ``enable_prefix_caching=False`` so
 repeated prompts and multi-``seq_len`` sweeps do not reuse KV blocks; TTFT stays
@@ -55,12 +61,12 @@ def _infer_model_label(model_path: str) -> str:
     return "unknown"
 
 
-def _vllm_avg_prompt_throughput_tokens_per_s(llm) -> float | None:
-    """Mirror ``LoggingStatLogger`` / ``loggers.py`` rolling-window prompt tok/s.
+def _vllm_last_logged_prompt_throughput_tps(llm) -> float | None:
+    """Read ``LoggingStatLogger.last_prompt_throughput`` for engine 0 (or aggregate).
 
-    Forces one ``_update_stats()`` pass (same computation as the
-    ``Avg prompt throughput: %.1f tokens/s`` log line) and returns the value
-    for engine 0. ``None`` if stat loggers are unavailable (e.g. log level).
+    Updates only when vLLM runs ``do_log_stats`` / ``_update_stats()`` on its
+    timer, so this is often ``0.0`` and is **not** a per-``seq_len`` benchmark
+    figure — use ``input_tps`` (from TTFT) for that.
     """
     mgr = getattr(llm.llm_engine, "logger_manager", None)
     if mgr is None:
@@ -69,11 +75,11 @@ def _vllm_avg_prompt_throughput_tokens_per_s(llm) -> float | None:
         per_engine = getattr(sl, "per_engine_stat_loggers", None)
         if isinstance(per_engine, dict) and 0 in per_engine:
             inner = per_engine[0]
-            inner._update_stats()  # noqa: SLF001
-            return float(inner.last_prompt_throughput)
-        upd = getattr(sl, "_update_stats", None)
-        if callable(upd) and hasattr(sl, "last_prompt_throughput"):
-            upd()  # noqa: SLF001
+            if hasattr(inner, "last_prompt_throughput"):
+                return float(inner.last_prompt_throughput)
+        if hasattr(sl, "last_prompt_throughput") and not isinstance(
+            getattr(sl, "per_engine_stat_loggers", None), dict
+        ):
             return float(sl.last_prompt_throughput)
     return None
 
@@ -208,14 +214,17 @@ def main() -> int:
         mean_ttft_ms = statistics.mean(ttfts_ms)
         median_ttft_ms = statistics.median(ttfts_ms)
         std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
-        avg_prompt_toks_s = _vllm_avg_prompt_throughput_tokens_per_s(llm)
+        mean_ttft_s = mean_ttft_ms / 1000.0
+        input_tps = (seq_len / mean_ttft_s) if mean_ttft_s > 0 else 0.0
+        vllm_interval_tps = _vllm_last_logged_prompt_throughput_tps(llm)
         out = {
             "case": args.case,
             "seq_len": seq_len,
-            "prompt_throughput_tps": avg_prompt_toks_s,
+            "input_tps": input_tps,
             "median_ttft_ms": median_ttft_ms,
             "mean_ttft_ms": mean_ttft_ms,
             "std_ttft_ms": std_ttft_ms,
+            "vllm_interval_prompt_throughput_tps": vllm_interval_tps,
             "model_label": model_label,
             "warmup": args.warmup,
             "repeats": args.repeats,
