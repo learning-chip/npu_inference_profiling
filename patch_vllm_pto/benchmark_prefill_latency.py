@@ -24,6 +24,10 @@ queue to first generated token), not end-to-end ``generate()`` wall time.
 ``mean_ms`` / ``std_ms`` / ``times_ms`` duplicate the TTFT stats for backward
 compatibility with simple parsers.
 
+Each JSON line also includes ``avg_prompt_throughput_tokens_per_s``: the same
+rolling-window value as vLLM's ``Avg prompt throughput`` log
+(``vllm/v1/metrics/loggers.py``), sampled once after the timed repeats.
+
 Prefix caching (APC) is forced **off** via ``enable_prefix_caching=False`` so
 repeated prompts and multi-``seq_len`` sweeps do not reuse KV blocks; TTFT stays
 prefill-dominated without APC speedups.
@@ -49,6 +53,29 @@ def _infer_model_label(model_path: str) -> str:
     if m2:
         return f"{m2.group(1)}B"
     return "unknown"
+
+
+def _vllm_avg_prompt_throughput_tokens_per_s(llm) -> float | None:
+    """Mirror ``LoggingStatLogger`` / ``loggers.py`` rolling-window prompt tok/s.
+
+    Forces one ``_update_stats()`` pass (same computation as the
+    ``Avg prompt throughput: %.1f tokens/s`` log line) and returns the value
+    for engine 0. ``None`` if stat loggers are unavailable (e.g. log level).
+    """
+    mgr = getattr(llm.llm_engine, "logger_manager", None)
+    if mgr is None:
+        return None
+    for sl in mgr.stat_loggers:
+        per_engine = getattr(sl, "per_engine_stat_loggers", None)
+        if isinstance(per_engine, dict) and 0 in per_engine:
+            inner = per_engine[0]
+            inner._update_stats()  # noqa: SLF001
+            return float(inner.last_prompt_throughput)
+        upd = getattr(sl, "_update_stats", None)
+        if callable(upd) and hasattr(sl, "last_prompt_throughput"):
+            upd()  # noqa: SLF001
+            return float(sl.last_prompt_throughput)
+    return None
 
 
 def _apply_case_env(case: str, device: str) -> None:
@@ -181,19 +208,17 @@ def main() -> int:
         mean_ttft_ms = statistics.mean(ttfts_ms)
         median_ttft_ms = statistics.median(ttfts_ms)
         std_ttft_ms = statistics.pstdev(ttfts_ms) if len(ttfts_ms) > 1 else 0.0
+        avg_prompt_toks_s = _vllm_avg_prompt_throughput_tokens_per_s(llm)
         out = {
             "case": args.case,
-            "model_label": model_label,
             "seq_len": seq_len,
+            "prompt_throughput_tps": avg_prompt_toks_s,
+            "median_ttft_ms": median_ttft_ms,
+            "mean_ttft_ms": mean_ttft_ms,
+            "std_ttft_ms": std_ttft_ms,
+            "model_label": model_label,
             "warmup": args.warmup,
             "repeats": args.repeats,
-            "mean_ttft_ms": mean_ttft_ms,
-            "median_ttft_ms": median_ttft_ms,
-            "std_ttft_ms": std_ttft_ms,
-            "ttfts_ms": ttfts_ms,
-            "mean_ms": mean_ttft_ms,
-            "std_ms": std_ttft_ms,
-            "times_ms": ttfts_ms,
         }
         line = json.dumps(out)
         print(line, flush=True)
