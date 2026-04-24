@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -13,6 +14,11 @@ model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc063
 # model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a"
 
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
+# Must run before vLLM spawns workers so ``apply_pto_patch`` loads in child processes.
+if "--pto" in sys.argv or os.environ.get("VLLM_USE_PTO_CHUNK") == "1":
+    _pto_patch_dir = Path(__file__).resolve().parent.parent / "patch_vllm_pto"
+    os.environ.setdefault("VLLM_PTO_PATCH_DIR", str(_pto_patch_dir))
 
 from transformers import AutoTokenizer  # noqa: E402
 from vllm import LLM, SamplingParams  # noqa: E402
@@ -81,7 +87,17 @@ def main() -> None:
         default=None,
         help="Max concurrent sequences. If unset, uses max(batch_size, 256).",
     )
+    parser.add_argument(
+        "--pto",
+        action="store_true",
+        help="Enable PTO JIT chunk kernels (sets VLLM_PTO_PATCH_DIR for worker import hook).",
+    )
     args = parser.parse_args()
+    if args.pto:
+        os.environ.setdefault(
+            "VLLM_PTO_PATCH_DIR",
+            str(Path(__file__).resolve().parent.parent / "patch_vllm_pto"),
+        )
 
     profile_root = args.profile_dir
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
