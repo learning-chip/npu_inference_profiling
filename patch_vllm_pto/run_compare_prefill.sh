@@ -23,13 +23,13 @@ MAX_LP="${MAX_LP:-300000}"
 
 COMMON=(--model "$MODEL" --device "$ASCEND_RT_VISIBLE_DEVICES" --seq-len "$SEQ_LEN" --num-generated "$NUM_GEN" --max-logprobs "$MAX_LP")
 
-echo "[run_compare_prefill] Triton → $OUTDIR/triton.npz"
-python3 "$PY" record --backend triton --output "$OUTDIR/triton.npz" "${COMMON[@]}" \
-  >"$OUTDIR/triton.meta.json" 2>"$OUTDIR/triton.log"
-
 echo "[run_compare_prefill] PTO → $OUTDIR/pto.npz"
 python3 "$PY" record --backend pto --output "$OUTDIR/pto.npz" "${COMMON[@]}" \
   >"$OUTDIR/pto.meta.json" 2>"$OUTDIR/pto.log"
+
+echo "[run_compare_prefill] Triton → $OUTDIR/triton.npz"
+python3 "$PY" record --backend triton --output "$OUTDIR/triton.npz" "${COMMON[@]}" \
+  >"$OUTDIR/triton.meta.json" 2>"$OUTDIR/triton.log"
 
 echo "[run_compare_prefill] compare (Triton vs PTO per-stage)"
 python3 "$PY" compare "$OUTDIR/triton.npz" "$OUTDIR/pto.npz" | tee "$OUTDIR/compare.txt"
