@@ -10,11 +10,13 @@ Otherwise those modules bind the **Triton** implementation at import time and ke
 
 That ordering cannot be enforced from the out-of-tree directory alone: it requires a **small edit** inside the installed `vllm_ascend` package.
 
-## File and change
+## Files and changes
 
 | Path (inside the `vllm_ascend` package) | Change |
 |----------------------------------------|--------|
-| `vllm_ascend/patch/worker/__init__.py` | Immediately after `import vllm_ascend.patch.worker.patch_v2.patch_triton` (still inside `if HAS_TRITON:`), run the optional `VLLM_PTO_PATCH_DIR` hook: prepend that directory to `sys.path`, `from apply import apply_pto_patch`, `apply_pto_patch()`. Must appear **before** `import vllm_ascend.patch.worker.patch_qwen3_next` and `patch_qwen3_5`. |
+| `vllm_ascend/patch/worker/__init__.py` | Immediately after `import vllm_ascend.patch.worker.patch_v2.patch_triton` (still inside `if HAS_TRITON:`), run the optional `VLLM_PTO_PATCH_DIR` hook: prepend that directory to `sys.path`, `from apply import apply_pto_patch`, `apply_pto_patch()`. Preferably **before** `import vllm_ascend.patch.worker.patch_qwen3_next` / `patch_qwen3_5`. |
+| `vllm_ascend/patch/worker/patch_qwen3_5.py` | Replace `from vllm.model_executor.layers.fla.ops import chunk_gated_delta_rule, …` with `import vllm.model_executor.layers.fla.ops as _vllm_fla_ops` plus the remaining `from … import fused_re…`. Call `_vllm_fla_ops.chunk_gated_delta_rule(` instead of `chunk_gated_delta_rule(`. **Why:** a bare `from … import chunk_gated_delta_rule` binds the function object at import time; later `apply_pto_patch()` updates `fla.ops` but Qwen3.5 still calls Triton unless the reference is resolved through the module at call time. |
+| `vllm_ascend/patch/worker/patch_qwen3_next.py` | Same pattern for the Qwen3-Next GDN prefill path. |
 
 ## Environment
 
@@ -38,7 +40,7 @@ Or:
 /path/to/npu_inference_profiling/patch_vllm_pto/vllm_source_patch/apply_vllm_ascend_pto_hook.sh
 ```
 
-The script is **idempotent**: if the hook is already present immediately after `patch_v2.patch_triton`, it exits successfully without edits.
+The script is **idempotent** for both the worker hook and the Qwen worker-file edits. Flags: `--skip-worker-hook`, `--skip-qwen-dynamic-import`, `--dry-run`.
 
 ## Reference unified diff
 
