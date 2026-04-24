@@ -6,7 +6,7 @@
 #
 # Optional: SEQ_LENS="512 1024 2048" WARMUP=2 REPEATS=10
 # SEQ_LENS are swept in one Python process per backend (one vLLM load per case).
-# Models: space-separated "LABEL:SNAPSHOT_DIR" pairs in BENCHMARK_MODEL_SPECS (default: 0.8B + 9B).
+# Models: space-separated "LABEL:SNAPSHOT_DIR" pairs in BENCHMARK_MODEL_SPECS (default: 2B then 0.8B).
 # Output: OUT_DIR/<LABEL>/{triton,pto,pto_mega}.jsonl — each JSON line includes model_label and model path.
 
 set -euo pipefail
@@ -17,8 +17,8 @@ export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 WARMUP="${WARMUP:-2}"
 REPEATS="${REPEATS:-10}"
 _SNAP_0_8B="/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/"
-_SNAP_9B="/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/"
-_DEFAULT_SPECS="0.8B:$_SNAP_0_8B 9B:$_SNAP_9B"
+_SNAP_2B="/scratch/model_weights/models--Qwen--Qwen3.5-2B/snapshots/15852e8c16360a2fea060d615a32b45270f8a8fc/"
+_DEFAULT_SPECS="2B:$_SNAP_2B 0.8B:$_SNAP_0_8B"
 BENCHMARK_MODEL_SPECS="${BENCHMARK_MODEL_SPECS:-$_DEFAULT_SPECS}"
 OUT_DIR="${OUT_DIR:-${SCRIPT_DIR}/_bench_prefill_$(date +%Y%m%d%H%M%S)}"
 SEQ_LENS="${SEQ_LENS:-512 1024 2048 4096 8192 16384 32768 65536}"

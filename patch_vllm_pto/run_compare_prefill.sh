@@ -7,7 +7,7 @@
 #
 # Optional: SEQ_LEN=64 NUM_GEN=5 OUTDIR=/tmp/my_cmp ./run_compare_prefill.sh
 # Models: space-separated "LABEL:SNAPSHOT_DIR" pairs in BENCHMARK_MODEL_SPECS
-# (default: 0.8B + 9B, same paths as run_benchmark_prefill_three_way.sh).
+# (default: 2B then 0.8B, same paths as run_benchmark_prefill_three_way.sh).
 # Megakernel record+compare runs by default; skip with COMPARE_MEGA=0.
 
 set -euo pipefail
@@ -22,8 +22,8 @@ SEQ_LEN="${SEQ_LEN:-128}"
 NUM_GEN="${NUM_GEN:-11}"
 MAX_LP="${MAX_LP:-300000}"
 _SNAP_0_8B="/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/"
-_SNAP_9B="/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/"
-_DEFAULT_SPECS="0.8B:$_SNAP_0_8B 9B:$_SNAP_9B"
+_SNAP_2B="/scratch/model_weights/models--Qwen--Qwen3.5-2B/snapshots/15852e8c16360a2fea060d615a32b45270f8a8fc/"
+_DEFAULT_SPECS="2B:$_SNAP_2B 0.8B:$_SNAP_0_8B"
 BENCHMARK_MODEL_SPECS="${BENCHMARK_MODEL_SPECS:-$_DEFAULT_SPECS}"
 
 echo "[run_compare_prefill] models: $BENCHMARK_MODEL_SPECS"
@@ -54,4 +54,4 @@ for SPEC in $BENCHMARK_MODEL_SPECS; do
   python3 "$PY" compare "$SUB/triton.npz" "$SUB/pto_mega.npz" | tee "$SUB/compare_mega.txt"
 done
 
-echo "[run_compare_prefill] OK. Artifacts under $OUTDIR/<LABEL>/ (e.g. 0.8B/, 9B/)"
+echo "[run_compare_prefill] OK. Artifacts under $OUTDIR/<LABEL>/ (e.g. 2B/, 0.8B/)"
