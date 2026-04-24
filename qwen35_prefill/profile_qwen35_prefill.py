@@ -1,5 +1,34 @@
 #!/usr/bin/env python3
-"""Offline vLLM-Ascend prefill-only profiling for Qwen3.5 with torch_npu profiler."""
+"""Offline vLLM-Ascend prefill-only profiling for Qwen3.5 with torch_npu profiler.
+
+PTO profile trace (JIT chunk kernels instead of Triton GDN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Requires ``vllm_ascend`` installed with the worker hook that reads
+``VLLM_PTO_PATCH_DIR`` (see ``vllm_ascend/patch/worker/__init__.py``). The flag
+``--pto`` sets that directory before workers spawn so PTO replaces
+``chunk_gated_delta_rule`` during prefill.
+
+Example — pick a free NPU, write traces under ``./pto_prefill_trace``::
+
+    export ASCEND_RT_VISIBLE_DEVICES=4
+    python3 /workdir/npu_inference_profiling/qwen35_prefill/profile_qwen35_prefill.py \
+        --pto \
+        --profile-dir /workdir/npu_inference_profiling/qwen35_prefill/pto_prefill_trace \
+        --batch-size 1 --seq-len 4096 --max-tokens 1
+
+Equivalent without ``--pto`` (set env before Python starts so spawn inherits it)::
+
+    export ASCEND_RT_VISIBLE_DEVICES=4
+    export VLLM_PTO_PATCH_DIR=/workdir/npu_inference_profiling/patch_vllm_pto
+    python3 /workdir/npu_inference_profiling/qwen35_prefill/profile_qwen35_prefill.py \
+        --profile-dir /workdir/npu_inference_profiling/qwen35_prefill/pto_prefill_trace \
+        --batch-size 1 --seq-len 4096 --max-tokens 1
+
+Profiler output: under ``--profile-dir``, the script prints the path to the latest
+Chrome trace, typically
+``<profile-dir>/rank0_<pid>_..._ascend_pt/ASCEND_PROFILER_OUTPUT/trace_view.json``.
+Engine logs should show that the PTO patch is active when ``--pto`` / env is set.
+"""
 
 from __future__ import annotations
 
