@@ -11,6 +11,8 @@ Run each ``--case`` in a **fresh** interpreter so env and JIT state stay isolate
 
 Emits one JSON object per invocation on stdout. Use ``--output-jsonl PATH`` to
 append the same line to a file (newline-delimited JSON) for comparing runs.
+``run_benchmark_prefill_three_way.sh`` passes a different ``PATH`` per case
+(e.g. ``OUT_DIR/triton.jsonl``) so each case’s JSONL stays separate.
 
 Latency is **TTFT** (time to
 first token), taken from ``RequestOutput.metrics.first_token_latency`` seconds
