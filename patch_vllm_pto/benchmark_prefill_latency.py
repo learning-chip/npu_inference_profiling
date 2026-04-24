@@ -22,6 +22,10 @@ queue to first generated token), not end-to-end ``generate()`` wall time.
 
 ``mean_ms`` / ``std_ms`` / ``times_ms`` duplicate the TTFT stats for backward
 compatibility with simple parsers.
+
+Prefix caching (APC) is forced **off** via ``enable_prefix_caching=False`` so
+repeated prompts and multi-``seq_len`` sweeps do not reuse KV blocks; TTFT stays
+prefill-dominated without APC speedups.
 """
 from __future__ import annotations
 
@@ -111,6 +115,7 @@ def main() -> int:
         max_num_batched_tokens=prefill_tokens,
         max_num_seqs=8,
         disable_log_stats=False,
+        enable_prefix_caching=False,
     )
     sp = SamplingParams(
         temperature=0.0,
