@@ -22,6 +22,7 @@ Examples::
     export ASCEND_RT_VISIBLE_DEVICES=0
     python3 compare_prefill_next_token.py record --backend triton --output ./tmp/tri.npz
     python3 compare_prefill_next_token.py record --backend pto --output ./tmp/pto.npz
+    python3 compare_prefill_next_token.py record --backend pto_mega --output ./tmp/mega.npz
     python3 compare_prefill_next_token.py compare ./tmp/tri.npz ./tmp/pto.npz
 
 Or::
@@ -46,6 +47,7 @@ def _strip_pto_from_environ() -> None:
         if k.startswith("VLLM_PTO"):
             del os.environ[k]
     os.environ.pop("VLLM_USE_PTO_CHUNK", None)
+    os.environ.pop("VLLM_PTO_MEGAKERNEL", None)
 
 
 def _child_env_for_backend(with_pto: bool, artifact: str, base_env: dict[str, str]) -> dict[str, str]:
@@ -56,6 +58,7 @@ def _child_env_for_backend(with_pto: bool, artifact: str, base_env: dict[str, st
             continue
         env[k] = v
     env.pop("VLLM_USE_PTO_CHUNK", None)
+    env.pop("VLLM_PTO_MEGAKERNEL", None)
     env["_CMP_ARTIFACT"] = artifact
     if with_pto:
         env["VLLM_PTO_PATCH_DIR"] = str(_PATCH)
@@ -72,10 +75,14 @@ def _apply_record_environ(*, backend: str, device: str) -> None:
     os.environ["_CMP_BACKEND"] = backend
     if backend == "pto":
         os.environ["VLLM_PTO_PATCH_DIR"] = str(_PATCH)
+        os.environ.pop("VLLM_PTO_MEGAKERNEL", None)
+    elif backend == "pto_mega":
+        os.environ["VLLM_PTO_PATCH_DIR"] = str(_PATCH)
+        os.environ["VLLM_PTO_MEGAKERNEL"] = "1"
     elif backend == "triton":
         _strip_pto_from_environ()
     else:
-        raise ValueError(f"backend must be triton or pto, got {backend!r}")
+        raise ValueError(f"backend must be triton, pto, or pto_mega, got {backend!r}")
 
 
 def _verify_chunk_backend() -> None:
@@ -86,12 +93,21 @@ def _verify_chunk_backend() -> None:
     want = os.environ.get("_CMP_BACKEND", "").lower().strip()
     fn = fla_ops.chunk_gated_delta_rule
     wrapped = bool(getattr(fn, "_vllm_pto_chunk_wrapper_installed", False))
-    if want == "pto" and not wrapped:
+    if want in ("pto", "pto_mega") and not wrapped:
         raise RuntimeError(
             "PTO record: expected ``apply_pto_patch`` wrapper on "
             "`vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule` "
             f"(missing _vllm_pto_chunk_wrapper_installed; got {fn!r}). "
             "Check VLLM_PTO_PATCH_DIR and vllm_ascend worker import order."
+        )
+    if want == "pto_mega" and os.environ.get("VLLM_PTO_MEGAKERNEL", "").strip() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        raise RuntimeError(
+            "pto_mega record: expected VLLM_PTO_MEGAKERNEL to enable the fused kernel path."
         )
     if want == "triton" and wrapped:
         raise RuntimeError(
@@ -216,7 +232,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     ids_tri = np.asarray(zt["token_ids"])
     ids_pto = np.asarray(zp["token_ids"])
     print(f"Triton token_ids:    {ids_tri.tolist()}")
-    print(f"PTO    token_ids:    {ids_pto.tolist()}")
+    print(f"Candidate token_ids: {ids_pto.tolist()}")
 
     if ids_tri.shape != ids_pto.shape or np.any(ids_tri != ids_pto):
         print("MISMATCH: greedy token id sequence differs.")
@@ -271,7 +287,12 @@ def main() -> int:
 
     p_rec = sub.add_parser("record", help="Run one backend and save .npz (start a fresh Python process per backend).")
     _add_common_model_args(p_rec)
-    p_rec.add_argument("--backend", choices=("triton", "pto"), required=True)
+    p_rec.add_argument(
+        "--backend",
+        choices=("triton", "pto", "pto_mega"),
+        required=True,
+        help="``pto`` = six PTO stages; ``pto_mega`` = single fused megakernel launch.",
+    )
     p_rec.add_argument("--output", type=Path, required=True, help="Output .npz path")
     p_rec.set_defaults(func=cmd_record)
 

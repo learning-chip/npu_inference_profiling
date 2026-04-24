@@ -1,0 +1,4 @@
+*.npz
+_prefill_cmp_*
+_lm_eval_cmp_*
+_bench_prefill_*

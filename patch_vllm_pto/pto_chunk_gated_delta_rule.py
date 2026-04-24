@@ -22,6 +22,7 @@ C_PTO = 128
 # Repo paths (stable under /workdir in this environment)
 _PTO_KERNELS = "/workdir/pto-kernels/examples/jit_cpp"
 _CHUNK_GDN_DYN = os.path.join(_PTO_KERNELS, "chunk_gdn", "dynamic_bsnd")
+_PTO_MEGA_KERNEL = os.path.join(_PTO_KERNELS, "chunk_gdn", "pto_mega_kernel")
 _FAST_INV = os.path.join(_PTO_KERNELS, "fast_inverse")
 
 
@@ -81,6 +82,11 @@ def pto_solve_tril(
     )
     torch.npu.synchronize()
     return tensor_out.to(torch.float16)
+
+
+def _megakernel_env_enabled() -> bool:
+    v = os.environ.get("VLLM_PTO_MEGAKERNEL", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def _needs_triton_fallback(
@@ -215,6 +221,65 @@ def _pto_forward_core(
     return o, final
 
 
+def _pto_forward_mega(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    scale: float,
+    *,
+    output_final_state: bool,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Single-launch PTO megakernel; same numerics as ``_pto_forward_core`` (verified in-repo)."""
+    if _PTO_MEGA_KERNEL not in sys.path:
+        sys.path.insert(0, _PTO_MEGA_KERNEL)
+
+    from mega_kernel_compile import run_mega_kernel  # type: ignore
+
+    out_dtype = q.dtype
+    N_seq = int(cu_seqlens.numel() - 1)
+
+    q_w = q.to(torch.float16)
+    k_w = k.to(torch.float16)
+    v_w = v.to(torch.float16)
+    beta_w = beta.to(torch.float16)
+    g_w = g.to(torch.float32) if g.dtype != torch.float32 else g
+    cu32 = cu_seqlens.to(torch.int32).contiguous()
+
+    with torch.autograd.profiler.record_function("PTO_gdn_mega_kernel"):
+        if output_final_state:
+            o_mega, fs = run_mega_kernel(
+                q_w,
+                k_w,
+                v_w,
+                g_w,
+                beta_w,
+                cu32,
+                chunk_size=C_PTO,
+                scale=float(scale),
+                return_final_state=True,
+            )
+            final = fs.to(out_dtype)
+        else:
+            o_mega = run_mega_kernel(
+                q_w,
+                k_w,
+                v_w,
+                g_w,
+                beta_w,
+                cu32,
+                chunk_size=C_PTO,
+                scale=float(scale),
+                return_final_state=False,
+            )
+            final = None
+
+    o = o_mega.to(out_dtype)
+    return o, final
+
+
 @torch.compiler.disable
 def chunk_gated_delta_rule_pto(
     q: torch.Tensor,
@@ -332,15 +397,27 @@ def chunk_gated_delta_rule_pto(
             use_qk_l2norm_in_kernel=False,
         )
 
-    o, final_state = _pto_forward_core(
-        q,
-        k,
-        v,
-        g,
-        beta,
-        cu_seqlens,
-        float(scale),
-    )
+    if _megakernel_env_enabled():
+        o, final_state = _pto_forward_mega(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            cu_seqlens,
+            float(scale),
+            output_final_state=output_final_state,
+        )
+    else:
+        o, final_state = _pto_forward_core(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            cu_seqlens,
+            float(scale),
+        )
     if not output_final_state:
         final_state = None
     if head_first:

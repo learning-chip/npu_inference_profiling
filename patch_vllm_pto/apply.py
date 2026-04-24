@@ -33,8 +33,16 @@ def apply_pto_patch() -> None:
 
     fla_ops.chunk_gated_delta_rule = bind_triton(triton_chunk_gated_delta_rule)
     _PATCH_ACTIVE = True
+    _mega = os.environ.get("VLLM_PTO_MEGAKERNEL", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     _log.warning(
-        "PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).",
+        "PTO chunk_gated_delta_rule patch is active (fused megakernel, C=128)."
+        if _mega
+        else "PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).",
     )
 
 

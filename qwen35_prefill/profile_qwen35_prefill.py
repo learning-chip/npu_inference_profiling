@@ -6,7 +6,9 @@ PTO profile trace (JIT chunk kernels instead of Triton GDN)
 Requires ``vllm_ascend`` installed with the worker hook that reads
 ``VLLM_PTO_PATCH_DIR`` (see ``vllm_ascend/patch/worker/__init__.py``). The flag
 ``--pto`` sets that directory before workers spawn so PTO replaces
-``chunk_gated_delta_rule`` during prefill.
+``chunk_gated_delta_rule`` during prefill (six JIT stages). ``--pto-mega`` sets
+``VLLM_PTO_MEGAKERNEL=1`` for the single fused megakernel path; the Chrome trace
+should contain the ``PTO_gdn_mega_kernel`` profiler scope.
 
 Example — pick a free NPU, write traces under ``./pto_prefill_trace``::
 
@@ -45,9 +47,13 @@ model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc063
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 # Must run before vLLM spawns workers so ``apply_pto_patch`` loads in child processes.
-if "--pto" in sys.argv or os.environ.get("VLLM_USE_PTO_CHUNK") == "1":
-    _pto_patch_dir = Path(__file__).resolve().parent.parent / "patch_vllm_pto"
+_pto_patch_dir = Path(__file__).resolve().parent.parent / "patch_vllm_pto"
+if "--pto-mega" in sys.argv:
     os.environ.setdefault("VLLM_PTO_PATCH_DIR", str(_pto_patch_dir))
+    os.environ["VLLM_PTO_MEGAKERNEL"] = "1"
+elif "--pto" in sys.argv or os.environ.get("VLLM_USE_PTO_CHUNK") == "1":
+    os.environ.setdefault("VLLM_PTO_PATCH_DIR", str(_pto_patch_dir))
+    os.environ.pop("VLLM_PTO_MEGAKERNEL", None)
 
 from transformers import AutoTokenizer  # noqa: E402
 from vllm import LLM, SamplingParams  # noqa: E402
@@ -119,14 +125,28 @@ def main() -> None:
     parser.add_argument(
         "--pto",
         action="store_true",
-        help="Enable PTO JIT chunk kernels (sets VLLM_PTO_PATCH_DIR for worker import hook).",
+        help="Enable PTO per-stage JIT kernels (sets VLLM_PTO_PATCH_DIR for worker import hook).",
+    )
+    parser.add_argument(
+        "--pto-mega",
+        action="store_true",
+        help="Enable PTO fused megakernel (VLLM_PTO_PATCH_DIR + VLLM_PTO_MEGAKERNEL=1).",
     )
     args = parser.parse_args()
-    if args.pto:
+    if args.pto_mega and args.pto:
+        parser.error("Use only one of --pto and --pto-mega.")
+    if args.pto_mega:
         os.environ.setdefault(
             "VLLM_PTO_PATCH_DIR",
             str(Path(__file__).resolve().parent.parent / "patch_vllm_pto"),
         )
+        os.environ["VLLM_PTO_MEGAKERNEL"] = "1"
+    elif args.pto:
+        os.environ.setdefault(
+            "VLLM_PTO_PATCH_DIR",
+            str(Path(__file__).resolve().parent.parent / "patch_vllm_pto"),
+        )
+        os.environ.pop("VLLM_PTO_MEGAKERNEL", None)
 
     profile_root = args.profile_dir
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
@@ -199,6 +219,15 @@ def main() -> None:
         raise RuntimeError(f"Trace file looks too small: {tp}")
     print(f"Profiler output directory: {profile_root.resolve()}")
     print(f"Chrome trace (MindStudio Insight / chrome://tracing): {tp} ({tp.stat().st_size} bytes)")
+
+    if args.pto_mega:
+        raw = tp.read_text(encoding="utf-8", errors="ignore")
+        if "PTO_gdn_mega_kernel" not in raw:
+            raise RuntimeError(
+                "Megakernel profiling: expected ``PTO_gdn_mega_kernel`` in trace_view.json; "
+                "check that VLLM_PTO_MEGAKERNEL reached workers and the PTO patch is active."
+            )
+        print("OK: trace contains ``PTO_gdn_mega_kernel`` (megakernel launch path).")
 
 
 if __name__ == "__main__":

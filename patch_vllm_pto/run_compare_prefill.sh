@@ -6,6 +6,7 @@
 #   ./run_compare_prefill.sh
 #
 # Optional: SEQ_LEN=64 NUM_GEN=5 OUTDIR=/tmp/my_cmp ./run_compare_prefill.sh
+# Megakernel record+compare runs by default; skip with COMPARE_MEGA=0.
 
 set -euo pipefail
 
@@ -30,6 +31,13 @@ echo "[run_compare_prefill] PTO → $OUTDIR/pto.npz"
 python3 "$PY" record --backend pto --output "$OUTDIR/pto.npz" "${COMMON[@]}" \
   >"$OUTDIR/pto.meta.json" 2>"$OUTDIR/pto.log"
 
-echo "[run_compare_prefill] compare"
+echo "[run_compare_prefill] compare (Triton vs PTO per-stage)"
 python3 "$PY" compare "$OUTDIR/triton.npz" "$OUTDIR/pto.npz" | tee "$OUTDIR/compare.txt"
+
+echo "[run_compare_prefill] PTO megakernel → $OUTDIR/pto_mega.npz"
+python3 "$PY" record --backend pto_mega --output "$OUTDIR/pto_mega.npz" "${COMMON[@]}" \
+  >"$OUTDIR/pto_mega.meta.json" 2>"$OUTDIR/pto_mega.log"
+echo "[run_compare_prefill] compare (Triton vs PTO megakernel)"
+python3 "$PY" compare "$OUTDIR/triton.npz" "$OUTDIR/pto_mega.npz" | tee "$OUTDIR/compare_mega.txt"
+
 echo "[run_compare_prefill] OK. Artifacts in $OUTDIR"
