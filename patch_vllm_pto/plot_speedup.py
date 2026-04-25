@@ -17,7 +17,7 @@ OUT_DIR = Path(__file__).resolve().parent / "figure"
 CASE_STYLE = {
     "pto_mega": {"color": "#1f77b4", "label": "PTO mega"},
     "pto": {"color": "#ff7f0e", "label": "PTO"},
-    "triton": {"color": "#2ca02c", "label": "Triton"},
+    "triton": {"color": "k", "linestyle": "--", "label": "Triton"},
 }
 
 
@@ -61,7 +61,7 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
             speedup[c].append(t0 / t if t > 0 else float("nan"))
 
     fig, axes = plt.subplots(3, 1, figsize=(8.5, 9), sharex=True, constrained_layout=True)
-    ax_ttft, ax_tps, ax_sp = axes
+    ax_sp, ax_ttft, ax_tps = axes
 
     for c in ("pto_mega", "pto", "triton"):
         sty = CASE_STYLE[c]
@@ -69,9 +69,17 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
         ttft = np.array([float(data[c][sl]["median_ttft_ms"]) for sl in seq_lens])
         tps = np.array([float(data[c][sl]["input_tps"]) for sl in seq_lens])
         sp = np.array(speedup[c])
-        ax_ttft.plot(xs, ttft, marker="o", markersize=5, linewidth=2, label=sty["label"], color=sty["color"])
-        ax_tps.plot(xs, tps, marker="o", markersize=5, linewidth=2, label=sty["label"], color=sty["color"])
-        ax_sp.plot(xs, sp, marker="o", markersize=5, linewidth=2, label=sty["label"], color=sty["color"])
+        line_kw = dict(
+            marker="o",
+            markersize=5,
+            linewidth=2,
+            label=sty["label"],
+            color=sty["color"],
+            linestyle=sty.get("linestyle", "-"),
+        )
+        ax_sp.plot(xs, sp, **line_kw)
+        ax_ttft.plot(xs, ttft, **line_kw)
+        ax_tps.plot(xs, tps, **line_kw)
 
     for ax in axes:
         ax.set_xscale("log", base=2)
@@ -80,15 +88,13 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
         ax.grid(True, which="major", alpha=0.35)
         ax.legend(loc="best", fontsize=9)
 
+    ax_sp.set_ylabel("TTFT speedup vs Triton\n(triton TTFT / case TTFT)")
+    ax_sp.set_title(f"Prefill benchmark — {model_name} model")
+
     ax_ttft.set_ylabel("Median TTFT (ms)")
-    ax_ttft.set_title(f"Prefill benchmark — {model_name} model")
 
     ax_tps.set_ylabel("Input throughput (tok/s)")
-
-    ax_sp.set_ylabel("TTFT speedup vs Triton\n(triton TTFT / case TTFT)")
-    ax_sp.axhline(1.0, color="#666666", linestyle="--", linewidth=1, zorder=0)
-
-    ax_sp.set_xlabel("Sequence length (tokens)")
+    ax_tps.set_xlabel("Sequence length (tokens)")
 
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
