@@ -113,6 +113,8 @@ def _pto_forward_core(
     _ensure_pto_sys_path()
     from dynamic_kernel_libs import (  # type: ignore
         BLOCK_DIM,
+        _transpose_beta,
+        _transpose_g,
         run_chunk_cumsum,
         run_chunk_h,
         run_chunk_o,
@@ -136,6 +138,7 @@ def _pto_forward_core(
     g_w = g.to(torch.float32) if g.dtype != torch.float32 else g
 
     cu32 = cu_seqlens.to(torch.int32).contiguous()
+    stream = torch.npu.current_stream()._as_parameter_
 
     msk_lower = torch.tril(torch.ones(C_PTO, C_PTO, device=dev), diagonal=-1).float()
     msk_full = torch.tril(torch.ones(C_PTO, C_PTO, device=dev), diagonal=0).float()
@@ -145,10 +148,15 @@ def _pto_forward_core(
         run_chunk_cumsum(
             g_w,
             g_sum,
+            stream=stream,
             chunk_size=C_PTO,
             cu_seqlens=cu32,
             batch_size_override=N_seq,
         )
+
+    g_t = _transpose_g(g_sum)
+    beta_t = _transpose_beta(beta_w)
+    torch.npu.synchronize()
 
     A_out = torch.zeros(1, T, H, C_PTO, device=dev, dtype=torch.float16)
     with torch.autograd.profiler.record_function("PTO_gdn_scaled_dot_kkt"):
@@ -159,6 +167,9 @@ def _pto_forward_core(
             msk_lower,
             None,
             A_out,
+            stream=stream,
+            g_t=g_t,
+            beta_t=beta_t,
             chunk_size=C_PTO,
             cu_seqlens=cu32,
             batch_size_override=N_seq,
@@ -178,6 +189,9 @@ def _pto_forward_core(
             A_sol,
             w_out,
             u_out,
+            stream=stream,
+            g_t=g_t,
+            beta_t=beta_t,
             chunk_size=C_PTO,
             cu_seqlens=cu32,
             batch_size_override=N_seq,
@@ -196,6 +210,8 @@ def _pto_forward_core(
             s_out,
             v_new,
             fs_out,
+            stream=stream,
+            g_t=g_t,
             chunk_size=C_PTO,
             cu_seqlens=cu32,
             batch_size_override=N_seq,
@@ -211,6 +227,8 @@ def _pto_forward_core(
             g_sum,
             msk_full,
             o_fp16,
+            stream=stream,
+            g_t=g_t,
             chunk_size=C_PTO,
             cu_seqlens=cu32,
             batch_size_override=N_seq,
@@ -247,6 +265,7 @@ def _pto_forward_mega(
     beta_w = beta.to(torch.float16)
     g_w = g.to(torch.float32) if g.dtype != torch.float32 else g
     cu32 = cu_seqlens.to(torch.int32).contiguous()
+    stream = torch.npu.current_stream()._as_parameter_
 
     with torch.autograd.profiler.record_function("PTO_gdn_mega_kernel"):
         if output_final_state:
@@ -257,6 +276,7 @@ def _pto_forward_mega(
                 g_w,
                 beta_w,
                 cu32,
+                stream=stream,
                 chunk_size=C_PTO,
                 scale=float(scale),
                 return_final_state=True,
@@ -270,6 +290,7 @@ def _pto_forward_mega(
                 g_w,
                 beta_w,
                 cu32,
+                stream=stream,
                 chunk_size=C_PTO,
                 scale=float(scale),
                 return_final_state=False,
