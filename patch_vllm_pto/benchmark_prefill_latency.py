@@ -45,6 +45,7 @@ import json
 import os
 import re
 import statistics
+import sys
 from pathlib import Path
 
 _PATCH = Path(__file__).resolve().parent
@@ -102,6 +103,17 @@ def _apply_case_env(case: str, device: str) -> None:
         raise ValueError(case)
 
 
+def _apply_pto_patch_driver_early() -> None:
+    pt = os.environ.get("VLLM_PTO_PATCH_DIR")
+    if not pt or not os.path.isdir(pt):
+        return
+    if str(_PATCH) not in sys.path:
+        sys.path.insert(0, str(_PATCH))
+    from apply import apply_pto_patch  # noqa: E402
+
+    apply_pto_patch()
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--case", choices=("triton", "pto", "pto_mega"), required=True)
@@ -139,8 +151,13 @@ def main() -> int:
     _apply_case_env(args.case, args.device)
 
     from transformers import AutoTokenizer
+    import vllm_ascend.utils as vua
     from vllm import LLM, SamplingParams
     from vllm.outputs import RequestOutput
+
+    vua.adapt_patch(is_global_patch=False)
+    if args.case in ("pto", "pto_mega"):
+        _apply_pto_patch_driver_early()
 
     seq_lens: list[int] = list(args.seq_len)
     max_sl = max(seq_lens)

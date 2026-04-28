@@ -3,15 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Repo-relative default data dir
-BENCH_DIR = Path(__file__).resolve().parent / "bench_prefill_20260424"
-OUT_DIR = Path(__file__).resolve().parent / "figure"
+_ROOT = Path(__file__).resolve().parent
 
 # Plot order / legend: user-specified case → color
 CASE_STYLE = {
@@ -36,6 +35,10 @@ def _by_seq_len(rows: list[dict]) -> dict[int, dict]:
     return {int(r["seq_len"]): r for r in rows}
 
 
+def _sanitize_filename(label: str) -> str:
+    return label.replace(".", "_")
+
+
 def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
     cases = ["triton", "pto", "pto_mega"]
     data: dict[str, dict[int, dict]] = {}
@@ -52,7 +55,6 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
             )
 
     baseline = data["triton"]
-    # TTFT speedup vs triton: higher = faster first token (triton time / case time)
     speedup: dict[str, list[float]] = {c: [] for c in cases}
     for sl in seq_lens:
         t0 = float(baseline[sl]["median_ttft_ms"])
@@ -101,13 +103,86 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
 
 
 def main() -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    for sub, title in (("2B", "2B"), ("0.8B", "0.8B")):
-        _plot_model(
-            BENCH_DIR / sub,
-            title,
-            OUT_DIR / f"prefill_speedup_{sub.replace('.', '_')}.png",
-        )
+    parser = argparse.ArgumentParser(
+        description="Plot TTFT/TPS/speedup from triton.jsonl / pto.jsonl / pto_mega.jsonl",
+    )
+    parser.add_argument(
+        "--bench-dir",
+        action="append",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Root directory containing model subdirectories (each with *.jsonl). "
+            "May be repeated. Default: two runs (20260424 small models + 20260428 GQA)."
+        ),
+    )
+    parser.add_argument(
+        "--bench-model",
+        action="append",
+        dest="bench_models",
+        metavar="DIR:DISPLAY",
+        help=(
+            'Single dataset: bench root path and comma-separated MODEL:Title pairs '
+            '(e.g. bench_prefill:"2B:2B,0.8B:0.8B"). Use with repeated --bench-model '
+            "instead of defaults."
+        ),
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=_ROOT / "figure",
+        help="Output directory for PNGs (default: ./figure)",
+    )
+    args = parser.parse_args()
+
+    if args.bench_models:
+        plot_specs: list[tuple[Path, list[tuple[str, str]]]] = []
+        for raw in args.bench_models:
+            if ":" not in raw:
+                raise SystemExit("--bench-model must contain ':' (DIR:S1,S2,...)")
+            root_s, pairs_s = raw.split(":", 1)
+            root = Path(root_s).expanduser()
+            if not root.is_absolute():
+                root = (_ROOT / root).resolve()
+            pairs: list[tuple[str, str]] = []
+            for part in pairs_s.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if ":" not in part:
+                    raise SystemExit(f"bad MODEL:Title segment {part!r}")
+                lab, tit = part.split(":", 1)
+                pairs.append((lab.strip(), tit.strip() or lab.strip()))
+            plot_specs.append((root, pairs))
+    elif args.bench_dir:
+        roots = []
+        for p in args.bench_dir:
+            r = Path(p).expanduser()
+            roots.append(r if r.is_absolute() else (_ROOT / r).resolve())
+        if len(roots) == 1:
+            bench = roots[0]
+            pairs = [(d.name, d.name) for d in sorted(bench.iterdir()) if d.is_dir()]
+            plot_specs = [(bench, pairs)]
+        else:
+            plot_specs = []
+            for bench in roots:
+                subs = sorted(d.name for d in bench.iterdir() if d.is_dir())
+                plot_specs.append((bench, [(s, s) for s in subs]))
+    else:
+        plot_specs = [
+            (_ROOT / "bench_prefill_20260424", [("2B", "2B"), ("0.8B", "0.8B")]),
+            (_ROOT / "bench_prefill_20260428_gqa", [("4B", "4B"), ("9B", "9B")]),
+        ]
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    for bench_root, model_pairs in plot_specs:
+        for subdir, title in model_pairs:
+            model_dir = bench_root / subdir
+            if not model_dir.is_dir():
+                raise FileNotFoundError(f"missing benchmark dir {model_dir}")
+            outp = args.out_dir / f"prefill_speedup_{_sanitize_filename(title)}.png"
+            _plot_model(model_dir, title, outp)
+            print(f"wrote {outp}")
 
 
 if __name__ == "__main__":

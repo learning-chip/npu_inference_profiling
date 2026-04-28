@@ -85,12 +85,27 @@ def _apply_record_environ(*, backend: str, device: str) -> None:
         raise ValueError(f"backend must be triton, pto, or pto_mega, got {backend!r}")
 
 
+def _apply_pto_patch_driver_early() -> None:
+    """Bind PTO wrapper in this process **before** ``import vllm``, not only in workers."""
+    pt = os.environ.get("VLLM_PTO_PATCH_DIR")
+    if not pt or not os.path.isdir(pt):
+        return
+    if pt not in sys.path:
+        sys.path.insert(0, pt)
+    from apply import apply_pto_patch  # noqa: E402
+
+    apply_pto_patch()
+
+
 def _verify_chunk_backend() -> None:
     import vllm.model_executor.layers.fla.ops as fla_ops
     import vllm_ascend.utils as vua
 
-    vua.adapt_patch(is_global_patch=False)
     want = os.environ.get("_CMP_BACKEND", "").lower().strip()
+    vua.adapt_patch(is_global_patch=False)
+    if want in ("pto", "pto_mega"):
+        _apply_pto_patch_driver_early()
+
     fn = fla_ops.chunk_gated_delta_rule
     wrapped = bool(getattr(fn, "_vllm_pto_chunk_wrapper_installed", False))
     if want in ("pto", "pto_mega") and not wrapped:

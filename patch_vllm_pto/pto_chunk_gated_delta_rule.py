@@ -2,10 +2,22 @@
 """PTO-backed ``chunk_gated_delta_rule`` (C=128) for vLLM-Ascend Qwen3.5 prefill.
 
 Falls back to the Ascend Triton implementation when PTO cannot match semantics
-(non-zero ``initial_state``, PCP multi-device, or missing NPU).
+(non-zero ``initial_state``, PCP multi-device, missing NPU, or mismatched shapes).
+
+**MHA** (``linear_num_value_heads`` = ``linear_num_key_heads``): JIT chain from
+``dynamic_bsnd`` and optional megakernel from ``pto_mega_kernel``.
+
+**GQA / group-value** (more value heads than shared Q/K heads): JIT chain from
+``dynamic_bsnd_groupvalue`` megakernel from ``pto_mega_kernel_groupvalue``;
+cumsum/solve_tri still reuse ``dynamic_bsnd`` + ``fast_inverse`` (same as
+:e2e: ``verify_pto_triton_e2e_groupvalue``).
+
+Kernel modules are loaded via ``importlib`` so ``dynamic_kernel_libs.py`` names
+never collide between the two directories.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from functools import lru_cache
@@ -22,8 +34,32 @@ C_PTO = 128
 # Repo paths (stable under /workdir in this environment)
 _PTO_KERNELS = "/workdir/pto-kernels/examples/jit_cpp"
 _CHUNK_GDN_DYN = os.path.join(_PTO_KERNELS, "chunk_gdn", "dynamic_bsnd")
+_CHUNK_GDN_GV = os.path.join(_PTO_KERNELS, "chunk_gdn", "dynamic_bsnd_groupvalue")
 _PTO_MEGA_KERNEL = os.path.join(_PTO_KERNELS, "chunk_gdn", "pto_mega_kernel")
+_PTO_MEGA_KERNEL_GV = os.path.join(_PTO_KERNELS, "chunk_gdn", "pto_mega_kernel_groupvalue")
 _FAST_INV = os.path.join(_PTO_KERNELS, "fast_inverse")
+
+
+def _load_dynamic_kernel_libs_module(root_dir: str, logical_name: str):
+    ml = os.path.join(root_dir, "dynamic_kernel_libs.py")
+    spec = importlib.util.spec_from_file_location(logical_name, ml)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(logical_name, mod)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@lru_cache(maxsize=1)
+def _dkl_std():
+    """``dynamic_bsnd`` — cumsum, ``BLOCK_DIM`` for tri-inv, transpose helpers."""
+    return _load_dynamic_kernel_libs_module(_CHUNK_GDN_DYN, "pto_vllm_dkl_standard")
+
+
+@lru_cache(maxsize=1)
+def _dkl_gv():
+    """``dynamic_bsnd_groupvalue`` — scaled_dot_kkt … chunk_o."""
+    return _load_dynamic_kernel_libs_module(_CHUNK_GDN_GV, "pto_vllm_dkl_groupvalue")
 
 
 def _ensure_pto_sys_path() -> None:
@@ -62,11 +98,11 @@ def pto_solve_tril(
     chunk_size: int,
     num_heads: int,
 ) -> torch.Tensor:
+    std = _dkl_std()
     num_matrices = _count_varlen_chunks(cu_seqlens, chunk_size) * num_heads
     tensor_out = torch.zeros_like(A_fp16, dtype=torch.float32)
     minus_identity = _make_minus_identity(chunk_size, A_fp16.device)
     cu32 = cu_seqlens if cu_seqlens.dtype == torch.int32 else cu_seqlens.to(torch.int32)
-    from dynamic_kernel_libs import BLOCK_DIM  # type: ignore
 
     torch.npu.synchronize()
     tri_inv_func(
@@ -77,7 +113,7 @@ def pto_solve_tril(
         num_matrices,
         num_heads,
         cu_seqlens=cu32,
-        block_dim=BLOCK_DIM,
+        block_dim=std.BLOCK_DIM,
         is_lower=True,
     )
     torch.npu.synchronize()
@@ -87,6 +123,19 @@ def pto_solve_tril(
 def _megakernel_env_enabled() -> bool:
     v = os.environ.get("VLLM_PTO_MEGAKERNEL", "").strip().lower()
     return v in ("1", "true", "yes", "on")
+
+
+@lru_cache(maxsize=2)
+def _mega_kernel_compile_py(is_group_value: bool):
+    root = _PTO_MEGA_KERNEL_GV if is_group_value else _PTO_MEGA_KERNEL
+    path_py = os.path.join(root, "mega_kernel_compile.py")
+    logical = "patch_vllm_pto_mega_kernel_compile_gv" if is_group_value else "patch_vllm_pto_mega_kernel_compile_std"
+    spec = importlib.util.spec_from_file_location(logical, path_py)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(logical, mod)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _needs_triton_fallback(
@@ -100,7 +149,23 @@ def _needs_triton_fallback(
     return False
 
 
-def _pto_forward_core(
+def _pto_shapes_use_group_value_heads(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
+    """True iff Q/K share fewer heads than ``V`` / ``β`` / ``g`` (GQA), matching ``dynamic_bsnd_groupvalue``."""
+    if q.shape[2] != k.shape[2]:
+        raise ValueError("PTO expects q and k with the same head count on dim 2.")
+    if q.shape[3] != k.shape[3]:
+        raise ValueError("PTO expects q and k with the same head dim.")
+    hq = q.shape[2]
+    hv = v.shape[2]
+    return hv != hq
+
+
+def _pto_dtypes_single_head_dim_compatible(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
+    """FLA kernels can use different ``D_qk`` vs ``D_v``; PTO JIT uses one ``D`` for K/V matmuls."""
+    return q.shape[3] == v.shape[3]
+
+
+def _pto_forward_core_mha(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -109,10 +174,9 @@ def _pto_forward_core(
     cu_seqlens: torch.Tensor,
     scale: float,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Returns (o, final_state) with same dtype/device as ``q`` (final_state fp16/bf16)."""
-    _ensure_pto_sys_path()
-    from dynamic_kernel_libs import (  # type: ignore
-        BLOCK_DIM,
+    """MHA-style layout: ``H`` equal on ``q``, ``k``, ``v``."""
+    std = _dkl_std()
+    (
         _transpose_beta,
         _transpose_g,
         run_chunk_cumsum,
@@ -121,8 +185,16 @@ def _pto_forward_core(
         run_scaled_dot_kkt,
         run_wy_fast,
         total_chunks,
+    ) = (
+        std._transpose_beta,
+        std._transpose_g,
+        std.run_chunk_cumsum,
+        std.run_chunk_h,
+        std.run_chunk_o,
+        std.run_scaled_dot_kkt,
+        std.run_wy_fast,
+        std.total_chunks,
     )
-
     dev = q.device
     out_dtype = q.dtype
     N_seq = int(cu_seqlens.numel() - 1)
@@ -130,7 +202,6 @@ def _pto_forward_core(
     H = q.shape[2]
     D = q.shape[3]
 
-    # PTO stack expects fp16 activations; accumulate g in fp32
     q_w = q.to(torch.float16)
     k_w = k.to(torch.float16)
     v_w = v.to(torch.float16)
@@ -239,6 +310,158 @@ def _pto_forward_core(
     return o, final
 
 
+def _pto_forward_core_gqa(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    scale: float,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """GQA layout: ``q``, ``k`` have ``Hg`` heads; ``v``, ``β``, ``g`` have ``H`` value heads."""
+    std = _dkl_std()
+    gv = _dkl_gv()
+    _transpose_beta = std._transpose_beta
+    _transpose_g = std._transpose_g
+    run_chunk_cumsum = std.run_chunk_cumsum
+
+    dev = q.device
+    out_dtype = q.dtype
+    N_seq = int(cu_seqlens.numel() - 1)
+    T = q.shape[1]
+    Hg = q.shape[2]
+    H = v.shape[2]
+    D = q.shape[3]
+
+    q_w = q.to(torch.float16)
+    k_w = k.to(torch.float16)
+    v_w = v.to(torch.float16)
+    beta_w = beta.to(torch.float16)
+    g_w = g.to(torch.float32) if g.dtype != torch.float32 else g
+
+    cu32 = cu_seqlens.to(torch.int32).contiguous()
+    stream = torch.npu.current_stream()._as_parameter_
+
+    msk_lower = torch.tril(torch.ones(C_PTO, C_PTO, device=dev), diagonal=-1).float()
+    msk_full = torch.tril(torch.ones(C_PTO, C_PTO, device=dev), diagonal=0).float()
+
+    g_sum = torch.empty(1, T, H, device=dev, dtype=torch.float32)
+    with torch.autograd.profiler.record_function("PTO_gdn_chunk_cumsum"):
+        run_chunk_cumsum(
+            g_w,
+            g_sum,
+            stream=stream,
+            chunk_size=C_PTO,
+            cu_seqlens=cu32,
+            batch_size_override=N_seq,
+        )
+
+    g_t = _transpose_g(g_sum)
+    beta_t = _transpose_beta(beta_w)
+    torch.npu.synchronize()
+
+    A_out = torch.zeros(1, T, H, C_PTO, device=dev, dtype=torch.float16)
+    with torch.autograd.profiler.record_function("PTO_gdn_scaled_dot_kkt"):
+        gv.run_scaled_dot_kkt(
+            k_w,
+            beta_w,
+            g_sum,
+            msk_lower,
+            None,
+            A_out,
+            stream=stream,
+            g_t=g_t,
+            beta_t=beta_t,
+            chunk_size=C_PTO,
+            cu_seqlens=cu32,
+            batch_size_override=N_seq,
+            key_heads=Hg,
+        )
+
+    with torch.autograd.profiler.record_function("PTO_gdn_solve_tril"):
+        A_sol = pto_solve_tril(_tri_inv_kernel(), A_out, cu32, C_PTO, H)
+
+    w_out = torch.empty_like(v_w)
+    u_out = torch.empty_like(v_w)
+    with torch.autograd.profiler.record_function("PTO_gdn_wy_fast"):
+        gv.run_wy_fast(
+            k_w,
+            v_w,
+            beta_w,
+            g_sum,
+            A_sol,
+            w_out,
+            u_out,
+            stream=stream,
+            g_t=g_t,
+            beta_t=beta_t,
+            chunk_size=C_PTO,
+            cu_seqlens=cu32,
+            batch_size_override=N_seq,
+            key_heads=Hg,
+        )
+
+    tc_n = gv.total_chunks(N_seq, T, C_PTO, cu32)
+    s_out = torch.zeros(tc_n * H, D, D, device=dev, dtype=torch.float16)
+    v_new = torch.empty_like(v_w)
+    fs_out = torch.zeros(N_seq * H, D, D, device=dev, dtype=torch.float16)
+    with torch.autograd.profiler.record_function("PTO_gdn_chunk_h"):
+        gv.run_chunk_h(
+            k_w,
+            w_out,
+            u_out,
+            g_sum,
+            s_out,
+            v_new,
+            fs_out,
+            stream=stream,
+            g_t=g_t,
+            chunk_size=C_PTO,
+            cu_seqlens=cu32,
+            batch_size_override=N_seq,
+            key_heads=Hg,
+        )
+
+    o_fp16 = torch.empty_like(v_w)
+    with torch.autograd.profiler.record_function("PTO_gdn_chunk_o"):
+        gv.run_chunk_o(
+            q_w,
+            k_w,
+            v_new,
+            s_out,
+            g_sum,
+            msk_full,
+            o_fp16,
+            stream=stream,
+            g_t=g_t,
+            chunk_size=C_PTO,
+            cu_seqlens=cu32,
+            batch_size_override=N_seq,
+            key_heads=Hg,
+        )
+
+    o = (o_fp16 * scale).to(out_dtype)
+    final = fs_out.view(N_seq, H, D, D).to(out_dtype)
+    return o, final
+
+
+def _pto_forward_core(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    scale: float,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Returns (o, final_state) with same dtype/device as ``q`` (final_state fp16/bf16)."""
+    _ensure_pto_sys_path()
+    if _pto_shapes_use_group_value_heads(q, k, v):
+        return _pto_forward_core_gqa(q, k, v, g, beta, cu_seqlens, scale)
+    return _pto_forward_core_mha(q, k, v, g, beta, cu_seqlens, scale)
+
+
 def _pto_forward_mega(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -250,14 +473,12 @@ def _pto_forward_mega(
     *,
     output_final_state: bool,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Single-launch PTO megakernel; same numerics as ``_pto_forward_core`` (verified in-repo)."""
-    if _PTO_MEGA_KERNEL not in sys.path:
-        sys.path.insert(0, _PTO_MEGA_KERNEL)
-
-    from mega_kernel_compile import run_mega_kernel  # type: ignore
+    """Single-launch megakernel; numerics aligned with chunked PTO refs in-repo."""
+    gv_layout = _pto_shapes_use_group_value_heads(q, k, v)
+    mk = _mega_kernel_compile_py(gv_layout)
+    run_mega_kernel = mk.run_mega_kernel
 
     out_dtype = q.dtype
-    N_seq = int(cu_seqlens.numel() - 1)
 
     q_w = q.to(torch.float16)
     k_w = k.to(torch.float16)
@@ -266,6 +487,13 @@ def _pto_forward_mega(
     g_w = g.to(torch.float32) if g.dtype != torch.float32 else g
     cu32 = cu_seqlens.to(torch.int32).contiguous()
     stream = torch.npu.current_stream()._as_parameter_
+
+    mega_kw = dict(
+        chunk_size=C_PTO,
+        scale=float(scale),
+    )
+    if gv_layout:
+        mega_kw["key_heads"] = q.shape[2]
 
     with torch.autograd.profiler.record_function("PTO_gdn_mega_kernel"):
         if output_final_state:
@@ -277,9 +505,8 @@ def _pto_forward_mega(
                 beta_w,
                 cu32,
                 stream=stream,
-                chunk_size=C_PTO,
-                scale=float(scale),
                 return_final_state=True,
+                **mega_kw,
             )
             final = fs.to(out_dtype)
         else:
@@ -291,9 +518,8 @@ def _pto_forward_mega(
                 beta_w,
                 cu32,
                 stream=stream,
-                chunk_size=C_PTO,
-                scale=float(scale),
                 return_final_state=False,
+                **mega_kw,
             )
             final = None
 
@@ -418,6 +644,41 @@ def chunk_gated_delta_rule_pto(
             use_qk_l2norm_in_kernel=False,
         )
 
+    if not _pto_dtypes_single_head_dim_compatible(q, k, v):
+        return _triton_impl(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            scale=scale,
+            initial_state=initial_state,
+            output_final_state=output_final_state,
+            cu_seqlens=cu_seqlens,
+            prebuilt_meta=prebuilt_meta,
+            head_first=False,
+            use_qk_l2norm_in_kernel=False,
+        )
+
+    if _pto_shapes_use_group_value_heads(q, k, v):
+        hv = v.shape[2]
+        hq = q.shape[2]
+        if hv % hq != 0:
+            return _triton_impl(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                scale=scale,
+                initial_state=initial_state,
+                output_final_state=output_final_state,
+                cu_seqlens=cu_seqlens,
+                prebuilt_meta=prebuilt_meta,
+                head_first=False,
+                use_qk_l2norm_in_kernel=False,
+            )
+
     if _megakernel_env_enabled():
         o, final_state = _pto_forward_mega(
             q,
@@ -481,6 +742,5 @@ def bind_triton(_triton_impl):
 
     _bound.__name__ = "chunk_gated_delta_rule"
     _bound.__doc__ = chunk_gated_delta_rule_pto.__doc__
-    # Introspection hook for tests / compare scripts (Ascend Triton op has no such attr).
     _bound._vllm_pto_chunk_wrapper_installed = True
     return _bound
