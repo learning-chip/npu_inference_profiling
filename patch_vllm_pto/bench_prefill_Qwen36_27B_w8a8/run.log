@@ -1,0 +1,6 @@
+[run_benchmark_prefill_three_way] writing under /workdir/npu_inference_profiling/patch_vllm_pto/bench_prefill_Qwen36_27B_w8a8
+[run_benchmark_prefill_three_way] models: 27B-w8a8:/scratch/model_weights/Qwen3.6-27B-w8a8/
+[run_benchmark_prefill_three_way] model_label=27B-w8a8 path=/scratch/model_weights/Qwen3.6-27B-w8a8/
+[bench] model_label=27B-w8a8 case=pto_mega seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=27B-w8a8 case=pto seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=27B-w8a8 case=triton seq_lens=512 1024 2048 4096 8192 16384 32768 65536

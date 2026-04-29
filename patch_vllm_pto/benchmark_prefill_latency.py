@@ -14,7 +14,8 @@ once and sweep lengths in-process (saves slow init; see
 Emits one JSON object per ``--seq-len`` on stdout. Use ``--output-jsonl PATH``
 to append each line (JSONL). ``run_benchmark_prefill_three_way.sh`` writes under
 ``OUT_DIR/<model_label>/`` (e.g. ``…/0.8B/triton.jsonl``) with ``model`` and
-``model_label`` fields on each line.
+``model_label`` fields on each line. For msmodelslim W8A8 weights, pass
+``--quantization ascend`` (or set shell env ``BENCH_QUANTIZATION`` in the driver script).
 
 Latency is **TTFT** (time to
 first token), taken from ``RequestOutput.metrics.first_token_latency`` seconds
@@ -138,6 +139,12 @@ def main() -> int:
     p.add_argument("--device", default="0", help="ASCEND_RT_VISIBLE_DEVICES (single NPU index)")
     p.add_argument("--warmup", type=int, default=2)
     p.add_argument("--repeats", type=int, default=10)
+    p.add_argument(
+        "--quantization",
+        default=None,
+        metavar="METHOD",
+        help="Forward to LLM(.., quantization=…) e.g. ``ascend`` for msmodelslim W8A8 checkpoints.",
+    )
     p.add_argument("--max-tokens", type=int, default=1, help="Keep small so timing is prefill-dominated.")
     p.add_argument(
         "--output-jsonl",
@@ -175,7 +182,7 @@ def main() -> int:
     max_model_len = max(max_sl + args.max_tokens + 32, 4096)
     prefill_tokens = max_sl + args.max_tokens + 256
 
-    llm = LLM(
+    llm_kwargs: dict = dict(
         model=args.model,
         trust_remote_code=True,
         dtype="bfloat16",
@@ -187,6 +194,10 @@ def main() -> int:
         disable_log_stats=False,
         enable_prefix_caching=False,
     )
+    q = getattr(args, "quantization", None)
+    if q:
+        llm_kwargs["quantization"] = q
+    llm = LLM(**llm_kwargs)
     sp = SamplingParams(
         temperature=0.0,
         max_tokens=args.max_tokens,

@@ -20,7 +20,9 @@ Scripts that **`import vllm`** in the coordinator process **must call** `adapt_p
 |------|------|
 | `apply.py` | `apply_pto_patch()` — bind PTO wrapper on `vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule` |
 | `pto_chunk_gated_delta_rule.py` | PTO forward (**MHA** ↔ **dynamic_bsnd**/megakernel **GQA** ↔ **dynamic_bsnd_groupvalue**/megakernel gv), `record_function("PTO_gdn_*")` scopes |
-| `compare_prefill_next_token.py` | Greedy tokens + first-step full-vocab logprobs: **`record`** / **`compare`** |
+| `compare_prefill_next_token.py` | Greedy tokens + first-step full-vocab logprobs: **`record`** / **`compare`** (**`--quantization ascend`** optional) |
+| `benchmark_prefill_latency.py` | Prefill TTFT sweep → JSON lines (**`--quantization ascend`** optional) |
+| `run_benchmark_prefill_three_way.sh` | Writes `OUT_DIR/<LABEL>/{triton,pto,pto_mega}.jsonl`; env **`BENCH_QUANTIZATION`** forwards to **`benchmark_prefill_latency.py`** |
 | `run_compare_prefill.sh` | Two shell-level `python … record` invocations + `compare` (no nested Python `subprocess`) |
 | `compare_pto_triton_lm_eval.py` | Wikitext token PPL + optional MMLU (file-based child results; see script doc) |
 | `sanity_pto_triton_eval.sh` | Tiny Bash-driven eval with `timeout(1)` |
@@ -34,10 +36,11 @@ vLLM already spawns engine subprocesses. This repo **does not** nest another Pyt
 
 ```bash
 export ASCEND_RT_VISIBLE_DEVICES=0
+export BENCH_QUANTIZATION=ascend   # required for **Qwen3.6-27B-w8a8** in default ``BENCHMARK_MODEL_SPECS``
 ./run_compare_prefill.sh
 ```
 
-Or manually:
+Default **`BENCHMARK_MODEL_SPECS`** lists **2B**, **0.8B**, **4B**, **9B**, and **27B-w8a8** (see **`run_compare_prefill.sh`** / **`run_benchmark_prefill_three_way.sh`**). Set **`BENCH_QUANTIZATION=ascend`** whenever that W8A8 path is included; override **`BENCHMARK_MODEL_SPECS`** if you only run BF16 checkpoints and do not want **`ascend`** quantization.
 
 ```bash
 python3 compare_prefill_next_token.py record --backend triton --output /tmp/tri.npz --device 0
@@ -105,6 +108,32 @@ Command:
 | 16384 | 1431.9 | 1340.1 | 1326.2 |
 | 32768 | 3060.1 | 2878.6 | 2862.9 |
 | 65536 | 7159.3 | 6776.0 | 6734.7 |
+
+### Qwen3.6-27B W8A8 (`quantization=ascend`, msmodelslim)
+
+Checkpoint: **`/scratch/model_weights/Qwen3.6-27B-w8a8`**. **`text_config`** matches Qwen3.5 dense GQA (**Hg=16**, **48** recurrent value heads, **D=128** KV → **dynamic_bsnd_groupvalue** / **`pto_mega_kernel_groupvalue`**; megakernel build logs **`H48_Hg16_D128`**).
+
+Use **`--quantization ascend`** on **`benchmark_prefill_latency.py`** and **`compare_prefill_next_token.py record`**, or **`BENCH_QUANTIZATION=ascend`** when running **`run_benchmark_prefill_three_way.sh`** (forwards **`--quantization`** to **`LLM()`**).
+
+| Parity probe (`SEQ_LEN=512`, `NUM_GEN=5`) | Result |
+|------------------------------------------|--------|
+| Greedy continuation (5 decoded tokens) | **Match** Ascend **Triton** vs **PTO staged** vs **PTO mega** (`[279, 15217, 5388, 13, 561]`). |
+| First-step full-vocab logprob vs **Triton** (`--max-logprobs 300000`) | `max_abs ≈ 6.99`, `rmse ≈ 1.31` — typical **`numpy.allclose`** default strict check **does not apply** vs BF16-only models; quantized matmul/stacking widens deltas while **the greedy path stays identical**. |
+| **PTO staged** vs **PTO mega** first-step logits | **Bit-identical** on this checkpoint (`max_abs` difference 0). |
+
+Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_27B_w8a8/27B-w8a8/`** (`triton` · `pto` · `pto_mega`). **`SEQ_LEN`** rung through **32768** on all three overlays; **`65536`** is **skipped** — Ascend **Triton** **`chunk_fwd_o` / chunk offsets** surfaced **`ACL stream synchronize … error 507014`** at that prompt length **here**, while staged/mega **PTO** kernels completed standalone runs (**keep JSONL grids aligned for `plot_speedup.py`**).
+
+| seq_len | Triton median TTFT (ms) | PTO median TTFT (ms) | PTO mega median TTFT (ms) |
+|--------:|-------------------------:|---------------------:|--------------------------:|
+| 512 | 354.9 | 365.0 | 306.9 |
+| 1024 | 414.1 | 420.6 | 355.8 |
+| 2048 | 557.1 | 546.1 | 487.2 |
+| 4096 | 924.9 | 851.0 | 814.7 |
+| 8192 | 1789.3 | 1653.8 | 1619.9 |
+| 16384 | 3389.6 | 3134.8 | 3095.8 |
+| 32768 | 7372.7 | 6890.2 | 6844.5 |
+
+**Figure:** **`figure/prefill_speedup_27B-w8a8.png`**.
 
 ## Worker hook
 

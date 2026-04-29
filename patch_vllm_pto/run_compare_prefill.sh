@@ -7,7 +7,8 @@
 #
 # Optional: SEQ_LEN=64 NUM_GEN=5 OUTDIR=/tmp/my_cmp ./run_compare_prefill.sh
 # Models: space-separated "LABEL:SNAPSHOT_DIR" pairs in BENCHMARK_MODEL_SPECS
-# (default: 2B, 0.8B, Qwen3.5-4B, Qwen3.5-9B — latter two require GQA PTO JIT from ``pto_chunk_gated_delta_rule.py``).
+# (default: 2B, 0.8B, Qwen3.5-4B, Qwen3.5-9B, **Qwen3.6-27B-w8a8** — GQA needs groupvalue PTO; W8A8 needs
+# **`export BENCH_QUANTIZATION=ascend`** alongside **``VLLM_PTO_PATCH_DIR``**).
 # Megakernel record+compare runs by default; skip with COMPARE_MEGA=0.
 
 set -euo pipefail
@@ -25,10 +26,14 @@ _SNAP_0_8B="/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364
 _SNAP_2B="/scratch/model_weights/models--Qwen--Qwen3.5-2B/snapshots/15852e8c16360a2fea060d615a32b45270f8a8fc/"
 _SNAP_4B="/scratch/model_weights/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/"
 _SNAP_9B="/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/"
-_DEFAULT_SPECS="2B:$_SNAP_2B 0.8B:$_SNAP_0_8B 4B:$_SNAP_4B 9B:$_SNAP_9B"
+_SNAP_27B_W8A8="/scratch/model_weights/Qwen3.6-27B-w8a8/"
+_DEFAULT_SPECS="2B:$_SNAP_2B 0.8B:$_SNAP_0_8B 4B:$_SNAP_4B 9B:$_SNAP_9B 27B-w8a8:$_SNAP_27B_W8A8"
 BENCHMARK_MODEL_SPECS="${BENCHMARK_MODEL_SPECS:-$_DEFAULT_SPECS}"
+# Forward to ``compare_prefill_next_token.py record`` (needed for msmodelslim W8A8 when **27B-w8a8** is in specs).
+BENCH_QUANTIZATION="${BENCH_QUANTIZATION:-}"
 
 echo "[run_compare_prefill] models: $BENCHMARK_MODEL_SPECS"
+echo "[run_compare_prefill] BENCH_QUANTIZATION=${BENCH_QUANTIZATION:-<unset>}"
 
 for SPEC in $BENCHMARK_MODEL_SPECS; do
   LABEL="${SPEC%%:*}"
@@ -37,6 +42,9 @@ for SPEC in $BENCHMARK_MODEL_SPECS; do
   mkdir -p "$SUB"
 
   COMMON=(--model "$MPATH" --device "$ASCEND_RT_VISIBLE_DEVICES" --seq-len "$SEQ_LEN" --num-generated "$NUM_GEN" --max-logprobs "$MAX_LP")
+  if [[ -n "${BENCH_QUANTIZATION}" ]]; then
+    COMMON+=(--quantization "${BENCH_QUANTIZATION}")
+  fi
 
   echo "[run_compare_prefill] model_label=$LABEL PTO → $SUB/pto.npz"
   python3 "$PY" record --backend pto --output "$SUB/pto.npz" "${COMMON[@]}" \
@@ -56,4 +64,4 @@ for SPEC in $BENCHMARK_MODEL_SPECS; do
   python3 "$PY" compare "$SUB/triton.npz" "$SUB/pto_mega.npz" | tee "$SUB/compare_mega.txt"
 done
 
-echo "[run_compare_prefill] OK. Artifacts under $OUTDIR/<LABEL>/ (e.g. 2B/, 0.8B/)"
+echo "[run_compare_prefill] OK. Artifacts under $OUTDIR/<LABEL>/ (e.g. 2B/, 0.8B/, …, 27B-w8a8/)"

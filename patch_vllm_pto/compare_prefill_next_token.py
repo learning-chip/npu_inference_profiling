@@ -167,7 +167,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     prompt = tok.decode(ids)
     prompts = [prompt]
 
-    llm = LLM(
+    llm_kw: dict = dict(
         model=args.model,
         trust_remote_code=True,
         dtype="bfloat16",
@@ -178,6 +178,9 @@ def cmd_record(args: argparse.Namespace) -> int:
         max_num_seqs=8,
         max_logprobs=args.max_logprobs,
     )
+    if getattr(args, "quantization", None):
+        llm_kw["quantization"] = args.quantization
+    llm = LLM(**llm_kw)
     vocab_size = llm.model_config.get_vocab_size()
 
     sp = SamplingParams(
@@ -294,6 +297,12 @@ def _add_common_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--num-generated", type=int, default=11)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-logprobs", type=int, default=300_000)
+    p.add_argument(
+        "--quantization",
+        default=None,
+        metavar="METHOD",
+        help="Pass to LLM(.., quantization=…) e.g. ascend for msmodelslim W8A8 weights.",
+    )
 
 
 def main() -> int:

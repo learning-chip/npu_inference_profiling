@@ -1,3 +1,6 @@
 vllm_prefill_profile*
 profile_sweep_runs/
 __pycache__
+
+kernel_meta
+fusion_result.json
