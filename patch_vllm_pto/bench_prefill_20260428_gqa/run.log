@@ -1,11 +1,11 @@
 [run_benchmark_prefill_three_way] writing under /workdir/npu_inference_profiling/patch_vllm_pto/bench_prefill_20260428_gqa
 [run_benchmark_prefill_three_way] models: 4B:/scratch/model_weights/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/ 9B:/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/
 [run_benchmark_prefill_three_way] model_label=4B path=/scratch/model_weights/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/
-[bench] model_label=4B case=pto_mega seq_lens=512 2048 8192 32768
-[bench] model_label=4B case=pto seq_lens=512 2048 8192 32768
-[bench] model_label=4B case=triton seq_lens=512 2048 8192 32768
+[bench] model_label=4B case=pto_mega seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=4B case=pto seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=4B case=triton seq_lens=512 1024 2048 4096 8192 16384 32768 65536
 [run_benchmark_prefill_three_way] model_label=9B path=/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/
-[bench] model_label=9B case=pto_mega seq_lens=512 2048 8192 32768
-[bench] model_label=9B case=pto seq_lens=512 2048 8192 32768
-[bench] model_label=9B case=triton seq_lens=512 2048 8192 32768
+[bench] model_label=9B case=pto_mega seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=9B case=pto seq_lens=512 1024 2048 4096 8192 16384 32768 65536
+[bench] model_label=9B case=triton seq_lens=512 1024 2048 4096 8192 16384 32768 65536
 [run_benchmark_prefill_three_way] done. Per-model dirs under /workdir/npu_inference_profiling/patch_vllm_pto/bench_prefill_20260428_gqa: <LABEL>/{triton,pto,pto_mega}.jsonl

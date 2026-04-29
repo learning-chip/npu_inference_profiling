@@ -76,27 +76,35 @@ Command:
 ## Prefill TTFT benchmark (GQA **4B** / **9B**)
 
 **Metric:** `RequestOutput.metrics.first_token_latency` (seconds), reported as **median TTFT** (ms) in JSONL (`median_ttft_ms`) and implied **input_tps** = `seq_len / (mean_ttft_ms / 1000)` from `benchmark_prefill_latency.py`.  
-**Run:** 2026-04-28 (fresh rerun), `WARMUP=1`, `REPEATS=5`, `SEQ_LENS="512 2048 8192 32768"`, `ASCEND_RT_VISIBLE_DEVICES=0`, **`run_benchmark_prefill_three_way.sh`** with `BENCHMARK_MODEL_SPECS` restricted to 4B/9B, output `bench_prefill_20260428_gqa/<LABEL>/{triton,pto,pto_mega}.jsonl` plus `run.log`.
+**Run:** `bench_prefill_20260428_gqa` — same **sequence-length ladder** and **`WARMUP` / `REPEATS`** as **`bench_prefill_20260424`** (0.8B / 2B): **`SEQ_LENS="512 1024 2048 4096 8192 16384 32768 65536"`**, `WARMUP=2`, `REPEATS=10`, `ASCEND_RT_VISIBLE_DEVICES=0`, **`run_benchmark_prefill_three_way.sh`** with **`BENCHMARK_MODEL_SPECS`** for 4B/9B only — `bench_prefill_20260428_gqa/<LABEL>/{triton,pto,pto_mega}.jsonl` plus `run.log`.
 
-At short sequence lengths, Triton vs staged PTO vs mega can sit within a few milliseconds; at **8192** and **32768** tokens, **PTO megakernel** shows clearly **lower median TTFT** than Ascend Triton (staged PTO is also faster than Triton at 4B on long prompts in this run). Regenerate **`figure/prefill_speedup_4B.png`** / **`prefill_speedup_9B.png`** with **`python3 plot_speedup.py`**.
+**PTO megakernel** routinely beats Ascend **Triton** on median TTFT from mid-length prompts upward; staged **PTO** is fastest on several long-context rows for **4B** here. Figures: **`figure/prefill_speedup_4B.png`** and **`prefill_speedup_9B.png`** from **`python3 plot_speedup.py`**.
 
 ### Qwen3.5-4B
 
 | seq_len | Triton median TTFT (ms) | PTO median TTFT (ms) | PTO mega median TTFT (ms) |
 |--------:|-------------------------:|--------------------:|--------------------------:|
-| 512 | 177.5 | 191.7 | 155.1 |
-| 2048 | 217.7 | 219.3 | 181.5 |
-| 8192 | 560.3 | 515.0 | 493.8 |
-| 32768 | 2256.6 | 2046.3 | 2030.3 |
+| 512 | 182.2 | 187.4 | 153.0 |
+| 1024 | 189.0 | 190.1 | 154.5 |
+| 2048 | 220.3 | 219.1 | 180.0 |
+| 4096 | 319.6 | 303.1 | 279.1 |
+| 8192 | 561.6 | 514.0 | 500.1 |
+| 16384 | 1081.3 | 975.3 | 958.3 |
+| 32768 | 2261.5 | 2061.9 | 2043.8 |
+| 65536 | 5527.5 | 5129.9 | 5100.1 |
 
 ### Qwen3.5-9B
 
 | seq_len | Triton median TTFT (ms) | PTO median TTFT (ms) | PTO mega median TTFT (ms) |
 |--------:|-------------------------:|--------------------:|--------------------------:|
-| 512 | 178.8 | 183.7 | 155.0 |
-| 2048 | 257.0 | 256.0 | 222.1 |
-| 8192 | 727.4 | 681.9 | 662.4 |
-| 32768 | 3027.6 | 2843.9 | 2823.3 |
+| 512 | 177.1 | 186.2 | 149.4 |
+| 1024 | 198.7 | 203.5 | 170.0 |
+| 2048 | 258.2 | 256.5 | 222.6 |
+| 4096 | 410.9 | 402.7 | 371.7 |
+| 8192 | 732.1 | 688.8 | 663.8 |
+| 16384 | 1431.9 | 1340.1 | 1326.2 |
+| 32768 | 3060.1 | 2878.6 | 2862.9 |
+| 65536 | 7159.3 | 6776.0 | 6734.7 |
 
 ## Worker hook
 
