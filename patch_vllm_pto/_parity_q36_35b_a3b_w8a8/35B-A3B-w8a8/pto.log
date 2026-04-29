@@ -1,0 +1,38 @@
+PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+(EngineCore pid=51402) PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+(EngineCore pid=51402) Loading safetensors checkpoint shards:   0% Completed | 0/10 [00:00<?, ?it/s]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  10% Completed | 1/10 [00:09<01:25,  9.48s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  20% Completed | 2/10 [00:20<01:20, 10.11s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  30% Completed | 3/10 [00:30<01:12, 10.38s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  40% Completed | 4/10 [00:41<01:03, 10.56s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  50% Completed | 5/10 [00:52<00:53, 10.75s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  60% Completed | 6/10 [01:03<00:43, 10.85s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  70% Completed | 7/10 [01:14<00:32, 10.89s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  80% Completed | 8/10 [01:25<00:21, 10.87s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards:  90% Completed | 9/10 [01:30<00:08,  8.92s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards: 100% Completed | 10/10 [01:33<00:00,  7.06s/it]
+(EngineCore pid=51402) Loading safetensors checkpoint shards: 100% Completed | 10/10 [01:33<00:00,  9.30s/it]
+(EngineCore pid=51402) 
+Rendering prompts:   0%|          | 0/1 [00:00<?, ?it/s]Rendering prompts: 100%|██████████| 1/1 [00:00<00:00, 32.83it/s]
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/fast_inverse.cpp:13:
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/kernel_tri_inv_rec_unroll.cpp:15:
+/workdir/pto-kernels/csrc/kernel/kernel_utils.h:11:9: warning: 'MEMORY_BASE' macro redefined [-Wmacro-redefined]
+#define MEMORY_BASE
+        ^
+<command line>:1:9: note: previous definition is here
+#define MEMORY_BASE 1
+        ^
+1 warning generated.
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/fast_inverse.cpp:13:
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/kernel_tri_inv_rec_unroll.cpp:15:
+/workdir/pto-kernels/csrc/kernel/kernel_utils.h:11:9: warning: 'MEMORY_BASE' macro redefined [-Wmacro-redefined]
+#define MEMORY_BASE
+        ^
+<command line>:1:9: note: previous definition is here
+#define MEMORY_BASE 1
+        ^
+1 warning generated.
+Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.93s/it, est. speed input: 10.37 toks/s, output: 0.11 toks/s]Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.93s/it, est. speed input: 10.37 toks/s, output: 0.11 toks/s]Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.93s/it, est. speed input: 10.37 toks/s, output: 0.11 toks/s]
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

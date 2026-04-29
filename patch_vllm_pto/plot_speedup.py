@@ -191,6 +191,7 @@ def main() -> None:
             (_ROOT / "bench_prefill_20260424", [("2B", "2B"), ("0.8B", "0.8B")]),
             (_ROOT / "bench_prefill_20260428_gqa", [("4B", "4B"), ("9B", "9B")]),
             (_ROOT / "bench_prefill_Qwen36_27B_w8a8", [("27B-w8a8", "27B-w8a8")]),
+            (_ROOT / "bench_prefill_Qwen36_35B_A3B_w8a8", [("35B-A3B-w8a8", "35B-A3B-w8a8")]),
         ]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)

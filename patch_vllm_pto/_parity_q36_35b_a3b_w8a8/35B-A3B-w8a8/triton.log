@@ -1,0 +1,17 @@
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+(EngineCore pid=53113) Loading safetensors checkpoint shards:   0% Completed | 0/10 [00:00<?, ?it/s]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  10% Completed | 1/10 [00:08<01:18,  8.74s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  20% Completed | 2/10 [00:18<01:14,  9.28s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  30% Completed | 3/10 [00:28<01:07,  9.65s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  40% Completed | 4/10 [00:38<00:58,  9.75s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  50% Completed | 5/10 [00:48<00:49,  9.92s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  60% Completed | 6/10 [00:58<00:39,  9.99s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  70% Completed | 7/10 [01:08<00:30, 10.00s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  80% Completed | 8/10 [01:18<00:19,  9.98s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards:  90% Completed | 9/10 [01:23<00:08,  8.21s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards: 100% Completed | 10/10 [01:25<00:00,  6.47s/it]
+(EngineCore pid=53113) Loading safetensors checkpoint shards: 100% Completed | 10/10 [01:25<00:00,  8.56s/it]
+(EngineCore pid=53113) 
+Rendering prompts:   0%|          | 0/1 [00:00<?, ?it/s]Rendering prompts: 100%|██████████| 1/1 [00:00<00:00, 34.83it/s]
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts: 100%|██████████| 1/1 [00:22<00:00, 22.95s/it, est. speed input: 20.31 toks/s, output: 0.22 toks/s]Processed prompts: 100%|██████████| 1/1 [00:22<00:00, 22.95s/it, est. speed input: 20.31 toks/s, output: 0.22 toks/s]Processed prompts: 100%|██████████| 1/1 [00:22<00:00, 22.95s/it, est. speed input: 20.31 toks/s, output: 0.22 toks/s]
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

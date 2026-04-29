@@ -36,11 +36,11 @@ vLLM already spawns engine subprocesses. This repo **does not** nest another Pyt
 
 ```bash
 export ASCEND_RT_VISIBLE_DEVICES=0
-export BENCH_QUANTIZATION=ascend   # required for **Qwen3.6-27B-w8a8** in default ``BENCHMARK_MODEL_SPECS``
+export BENCH_QUANTIZATION=ascend   # required for msmodelslim W8A8 paths (e.g. **Qwen3.6-27B-w8a8**) in default ``BENCHMARK_MODEL_SPECS``
 ./run_compare_prefill.sh
 ```
 
-Default **`BENCHMARK_MODEL_SPECS`** lists **2B**, **0.8B**, **4B**, **9B**, and **27B-w8a8** (see **`run_compare_prefill.sh`** / **`run_benchmark_prefill_three_way.sh`**). Set **`BENCH_QUANTIZATION=ascend`** whenever that W8A8 path is included; override **`BENCHMARK_MODEL_SPECS`** if you only run BF16 checkpoints and do not want **`ascend`** quantization.
+Default **`BENCHMARK_MODEL_SPECS`** lists **2B**, **0.8B**, **4B**, **9B**, and **27B-w8a8** (see **`run_compare_prefill.sh`** / **`run_benchmark_prefill_three_way.sh`**). **Qwen3.6-35B-A3B-w8a8** MoE is **not** in that default list (heavy load); pass an explicit **`BENCHMARK_MODEL_SPECS`** when benchmarking it. Set **`BENCH_QUANTIZATION=ascend`** whenever a W8A8 msmodelslim path is included; override **`BENCHMARK_MODEL_SPECS`** if you only run BF16 checkpoints and do not want **`ascend`** quantization.
 
 ```bash
 python3 compare_prefill_next_token.py record --backend triton --output /tmp/tri.npz --device 0
@@ -135,6 +135,35 @@ Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_27B_
 | 65536 | — (baseline failed) | 16386.5 | 16269.9 |
 
 **Figure:** **`figure/prefill_speedup_27B-w8a8.png`** (PTO timings at **65536** plotted; shaded region + plot subtitle explain missing Triton).
+
+### Qwen3.6-35B-A3B W8A8 MoE (`quantization=ascend`, msmodelslim)
+
+Checkpoint **`/scratch/model_weights/Qwen3.6-35B-A3B-w8a8/`** (`Qwen3_5MoeForConditionalGeneration`). Recurrent linear layers use **GQA** groupvalue PTO (**Hg=16**, **32** value heads, **D=128** KV in `text_config`), same style as **4B/9B/27B** but with MoE FFNs.
+
+Run with an explicit model spec, e.g. **`BENCHMARK_MODEL_SPECS="35B-A3B-w8a8:/scratch/model_weights/Qwen3.6-35B-A3B-w8a8/"`** and **`BENCH_QUANTIZATION=ascend`** (not part of the default multi-model driver list).
+
+| Parity probe (`SEQ_LEN=512`, `NUM_GEN=5`) | Result |
+|------------------------------------------|--------|
+| Greedy continuation (5 decoded tokens) | **Match** Ascend **Triton** vs **PTO staged** vs **PTO mega** (`[279, 15217, 5388, 13, 561]`). |
+| First-step full-vocab logprob vs **Triton** | **PTO staged:** `max_abs ≈ 1.65`, `rmse ≈ 0.47`. **PTO mega:** `max_abs ≈ 1.22`, `rmse ≈ 0.34` — W8A8 stack; strict **`numpy.allclose`** vs Triton **not** expected. |
+| **PTO staged** vs **PTO mega** first-step logits | **Not** bit-identical here (`max_abs ≈ 1.28`, `rmse ≈ 0.26`) — differs from dense **27B**; MoE + two kernel paths can diverge in logits while **greedy** IDs still agree. |
+
+Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_35B_A3B_w8a8/35B-A3B-w8a8/`**. On this run, **Triton** completed the same **seq_len** ladder through **65536** (no missing baseline row).
+
+| seq_len | Triton median TTFT (ms) | PTO median TTFT (ms) | PTO mega median TTFT (ms) |
+|--------:|-------------------------:|---------------------:|--------------------------:|
+| 512 | 301.5 | 346.1 | 262.6 |
+| 1024 | 305.0 | 341.3 | 263.4 |
+| 2048 | 323.8 | 348.0 | 276.1 |
+| 4096 | 388.6 | 382.3 | 317.4 |
+| 8192 | 620.2 | 567.9 | 534.5 |
+| 16384 | 1171.6 | 1041.8 | 1013.9 |
+| 32768 | 2454.5 | 2196.7 | 2157.2 |
+| 65536 | 5787.1 | 5298.3 | 5236.2 |
+
+**Figure:** **`figure/prefill_speedup_35B-A3B-w8a8.png`**.
+
+Parity artifacts (local run): **`_parity_q36_35b_a3b_w8a8/35B-A3B-w8a8/`** (`compare.txt`, **`compare_mega.txt`**, `*.npz`).
 
 ## Worker hook
 

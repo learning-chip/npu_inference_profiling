@@ -1,0 +1,5 @@
+Triton token_ids:    [279, 15217, 5388, 13, 561]
+Candidate token_ids: [279, 15217, 5388, 13, 561]
+OK: all greedy token ids match.
+First-step log-probs: max_abs=1.65415  rmse=0.465333  finite=248320 / 248320
+MISMATCH: first-step log-probs not within atol=0.005 rtol=0.02 (worst token id=96796).
