@@ -20,3 +20,10 @@ sudo mv $HOME/.cache/huggingface/hub/models--Qwen--Qwen3.5-9B /scratch/model_wei
 Bigger models need W8 quant to fit into single device
 - https://www.modelscope.cn/models/Eco-Tech/Qwen3.6-27B-w8a8
 - https://www.modelscope.cn/models/Eco-Tech/Qwen3.6-35B-A3B-w8a8
+
+```bash
+# if in docker, ensure `/scratch/model_weights/` is mounted with write permission
+pip install modelscope
+modelscope download --model Eco-Tech/Qwen3.6-27B-w8a8 --local_dir /scratch/model_weights/Qwen3.6-27B-w8a8
+modelscope download --model Eco-Tech/Qwen3.6-35B-A3B-w8a8 --local_dir /scratch/model_weights/Qwen3.6-35B-A3B-w8a8
+```
