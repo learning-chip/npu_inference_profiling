@@ -9,10 +9,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
 _ROOT = Path(__file__).resolve().parent
 
-# Plot order / legend: user-specified case → color
 CASE_STYLE = {
     "pto_mega": {"color": "#1f77b4", "label": "PTO mega"},
     "pto": {"color": "#ff7f0e", "label": "PTO"},
@@ -46,31 +44,31 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
         p = model_dir / f"{c}.jsonl"
         data[c] = _by_seq_len(_load_jsonl(p))
 
-    seq_lens = sorted(data["triton"].keys())
-    for c in cases:
-        if set(data[c].keys()) != set(seq_lens):
-            raise ValueError(
-                f"{model_dir.name}/{c}.jsonl seq_len set mismatch vs triton: "
-                f"{sorted(data[c].keys())} vs {seq_lens}"
-            )
+    baseline_k = sorted(data["triton"].keys())
+    union_k = sorted(set().union(*(set(data[c].keys()) for c in cases)))
+
+    seq_sp = baseline_k
 
     baseline = data["triton"]
-    speedup: dict[str, list[float]] = {c: [] for c in cases}
-    for sl in seq_lens:
+    speedup_k: dict[str, list[float]] = {c: [] for c in cases}
+    for sl in seq_sp:
         t0 = float(baseline[sl]["median_ttft_ms"])
         for c in cases:
+            if sl not in data[c]:
+                raise ValueError(f"{model_dir.name}/{c}.jsonl missing seq_len={sl} (need for speedup)")
             t = float(data[c][sl]["median_ttft_ms"])
-            speedup[c].append(t0 / t if t > 0 else float("nan"))
+            speedup_k[c].append(t0 / t if t > 0 else float("nan"))
 
-    fig, axes = plt.subplots(3, 1, figsize=(8.5, 9), sharex=True, constrained_layout=True)
+    fig, axes = plt.subplots(3, 1, figsize=(8.5, 10), sharex=True, constrained_layout=True)
     ax_sp, ax_ttft, ax_tps = axes
+
+    extra_after_triton = bool(baseline_k) and max(union_k) > max(baseline_k)
 
     for c in ("pto_mega", "pto", "triton"):
         sty = CASE_STYLE[c]
-        xs = np.array(seq_lens, dtype=float)
-        ttft = np.array([float(data[c][sl]["median_ttft_ms"]) for sl in seq_lens])
-        tps = np.array([float(data[c][sl]["input_tps"]) for sl in seq_lens])
-        sp = np.array(speedup[c])
+        xs_c = np.array(sorted(data[c].keys()), dtype=float)
+        ttft = np.array([float(data[c][int(sl)]["median_ttft_ms"]) for sl in xs_c])
+        tps_a = np.array([float(data[c][int(sl)]["input_tps"]) for sl in xs_c])
         line_kw = dict(
             marker="o",
             markersize=5,
@@ -79,26 +77,46 @@ def _plot_model(model_dir: Path, model_name: str, out_path: Path) -> None:
             color=sty["color"],
             linestyle=sty.get("linestyle", "-"),
         )
-        ax_sp.plot(xs, sp, **line_kw)
-        ax_ttft.plot(xs, ttft, **line_kw)
-        ax_tps.plot(xs, tps, **line_kw)
+        sp = np.array(speedup_k[c])
+        ax_sp.plot(np.array(seq_sp, dtype=float), sp, **line_kw)
+        ax_ttft.plot(xs_c, ttft, **line_kw)
+        ax_tps.plot(xs_c, tps_a, **line_kw)
+
+    if extra_after_triton and baseline_k:
+        lo = float(max(baseline_k))
+        hi = float(max(union_k))
+        for ax in (ax_ttft, ax_tps):
+            ax.axvspan(lo, hi, alpha=0.13, color="0.35", zorder=0)
 
     for ax in axes:
         ax.set_xscale("log", base=2)
-        ax.set_xticks(seq_lens)
+        xt = union_k
+        ax.set_xticks(xt)
         ax.get_xaxis().set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):d}"))
         ax.grid(True, which="major", alpha=0.35)
-        ax.legend(loc="best", fontsize=9)
+
+    ax_sp.legend(loc="best", fontsize=9)
+    ax_ttft.legend(loc="best", fontsize=9)
+    ax_tps.legend(loc="best", fontsize=9)
 
     ax_sp.set_ylabel("TTFT speedup vs Triton\n(triton TTFT / case TTFT)")
-    ax_sp.set_title(f"Prefill benchmark — {model_name} model")
+    main_title = f"Prefill benchmark — {model_name} model"
+    if extra_after_triton and baseline_k:
+        last_b = int(max(baseline_k))
+        last_u = int(max(union_k))
+        subtitle = (
+            f"(Triton baseline fails at seq_len={last_b})"
+        )
+        ax_sp.set_title(f"{main_title}\n{subtitle}", fontsize=10)
+    else:
+        ax_sp.set_title(main_title, fontsize=11)
 
     ax_ttft.set_ylabel("Median TTFT (ms)")
 
     ax_tps.set_ylabel("Input throughput (tok/s)")
     ax_tps.set_xlabel("Sequence length (tokens)")
 
-    fig.savefig(out_path, dpi=160)
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
 
 

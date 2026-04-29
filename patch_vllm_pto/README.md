@@ -121,7 +121,7 @@ Use **`--quantization ascend`** on **`benchmark_prefill_latency.py`** and **`com
 | First-step full-vocab logprob vs **Triton** (`--max-logprobs 300000`) | `max_abs ≈ 6.99`, `rmse ≈ 1.31` — typical **`numpy.allclose`** default strict check **does not apply** vs BF16-only models; quantized matmul/stacking widens deltas while **the greedy path stays identical**. |
 | **PTO staged** vs **PTO mega** first-step logits | **Bit-identical** on this checkpoint (`max_abs` difference 0). |
 
-Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_27B_w8a8/27B-w8a8/`** (`triton` · `pto` · `pto_mega`). **`SEQ_LEN`** rung through **32768** on all three overlays; **`65536`** is **skipped** — Ascend **Triton** **`chunk_fwd_o` / chunk offsets** surfaced **`ACL stream synchronize … error 507014`** at that prompt length **here**, while staged/mega **PTO** kernels completed standalone runs (**keep JSONL grids aligned for `plot_speedup.py`**).
+Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_27B_w8a8/27B-w8a8/`**. Ascend **Triton** **`chunk_gated_delta_rule`** failed at **`SEQ_LEN=65536`** (**`ACL … 507014`**) on this workload, so **`triton.jsonl`** stops at **32768**; **`pto.jsonl`** / **`pto_mega.jsonl`** include an extra row at **65536**. **`figure/prefill_speedup_27B-w8a8.png`** (**`plot_speedup.py`**) plots **median TTFT** and **input TPS** for **PTO** / **PTO mega** through **65536**, shades the segment after the last Triton measurement, annotates it, and keeps **speedup vs Triton** only where the baseline exists (**`seq_len` ≤ longest Triton run**).
 
 | seq_len | Triton median TTFT (ms) | PTO median TTFT (ms) | PTO mega median TTFT (ms) |
 |--------:|-------------------------:|---------------------:|--------------------------:|
@@ -132,8 +132,9 @@ Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_27B_
 | 8192 | 1789.3 | 1653.8 | 1619.9 |
 | 16384 | 3389.6 | 3134.8 | 3095.8 |
 | 32768 | 7372.7 | 6890.2 | 6844.5 |
+| 65536 | — (baseline failed) | 16386.5 | 16269.9 |
 
-**Figure:** **`figure/prefill_speedup_27B-w8a8.png`**.
+**Figure:** **`figure/prefill_speedup_27B-w8a8.png`** (PTO timings at **65536** plotted; shaded region + plot subtitle explain missing Triton).
 
 ## Worker hook
 
