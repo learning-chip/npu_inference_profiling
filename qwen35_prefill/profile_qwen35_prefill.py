@@ -41,8 +41,10 @@ import time
 from pathlib import Path
 
 # Default model (local snapshot); override with --model.
-model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/"
+# model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17/"
 # model_path = "/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+model_path = "/scratch/model_weights/Qwen3.6-27B-w8a8"
+# model_path = "/scratch/model_weights/Qwen3.6-35B-A3B-w8a8"
 
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
