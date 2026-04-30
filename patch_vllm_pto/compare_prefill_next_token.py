@@ -24,6 +24,7 @@ Examples::
     python3 compare_prefill_next_token.py record --backend pto --output ./tmp/pto.npz
     python3 compare_prefill_next_token.py record --backend pto_mega --output ./tmp/mega.npz
     python3 compare_prefill_next_token.py compare ./tmp/tri.npz ./tmp/pto.npz
+    python3 compare_prefill_next_token.py logprob_alignment ./tmp/tri.npz ./tmp/pto.npz ./tmp/mega.npz --out-dir ./figs
 
 Or::
 
@@ -230,17 +231,153 @@ def cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
-def _compare_logprob_vectors(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
-    d = a - b
-    finite = np.isfinite(a) & np.isfinite(b)
+def _distribution_from_log_probs(lp: np.ndarray) -> np.ndarray:
+    """Normalize exp(log-probabilities) over finite coordinates to a probability vector."""
+    finite = np.isfinite(lp)
+    out = np.zeros(lp.shape[0], dtype=np.float64)
     if not np.any(finite):
-        return {"max_abs": float("nan"), "rmse": float("nan"), "n_finite": 0.0}
-    d_f = d[finite]
+        return out
+    lpf = lp[finite].astype(np.float64)
+    mx = np.max(lpf)
+    e = np.exp(lpf - mx)
+    den = np.sum(e)
+    if den <= 0.0:
+        return out
+    out[finite] = e / den
+    return out
+
+
+def _kl_divergence_pq(p_ref: np.ndarray, p_cand: np.ndarray) -> float:
+    """D_KL(p_ref ‖ p_cand) in nats (natural log); both must be nonnegative and sum ~1."""
+    eps = 1e-300
+    p = np.asarray(p_ref, dtype=np.float64)
+    q = np.asarray(p_cand, dtype=np.float64)
+    return float(np.sum(np.where(p > eps, p * (np.log(p + eps) - np.log(q + eps)), 0.0)))
+
+
+def _logprob_alignment_metrics(lp_ref: np.ndarray, lp_cand: np.ndarray) -> dict[str, float]:
+    """First-step alignment: RMSE / relative RMSE (log-prob space) and KL with Triton distribution as reference."""
+    finite = np.isfinite(lp_ref) & np.isfinite(lp_cand)
+    if not np.any(finite):
+        return {
+            "max_abs": float("nan"),
+            "rmse": float("nan"),
+            "rel_rmse_rms_ref": float("nan"),
+            "rel_rmse_std_ref": float("nan"),
+            "kl_ref_vs_cand": float("nan"),
+            "n_finite": 0.0,
+        }
+    ref_f = lp_ref[finite].astype(np.float64)
+    cand_f = lp_cand[finite].astype(np.float64)
+    d = cand_f - ref_f
+    rmse = float(np.sqrt(np.mean(d**2)))
+    rms_ref = float(np.sqrt(np.mean(ref_f**2)))
+    std_ref = float(np.std(ref_f))
+    rel_rms = rmse / rms_ref if rms_ref > 1e-30 else float("nan")
+    rel_std = rmse / std_ref if std_ref > 1e-30 else float("nan")
+    p_ref = _distribution_from_log_probs(lp_ref)
+    p_cand = _distribution_from_log_probs(lp_cand)
+    kl = _kl_divergence_pq(p_ref, p_cand)
     return {
-        "max_abs": float(np.max(np.abs(d_f))),
-        "rmse": float(np.sqrt(np.mean(d_f.astype(np.float64) ** 2))),
+        "max_abs": float(np.max(np.abs(d))),
+        "rmse": rmse,
+        "rel_rmse_rms_ref": rel_rms,
+        "rel_rmse_std_ref": rel_std,
+        "kl_ref_vs_cand": kl,
         "n_finite": float(np.sum(finite)),
     }
+
+
+def _scatter_logprob_vs_ref(
+    lp_ref: np.ndarray,
+    lp_cand: np.ndarray,
+    out_path: Path,
+    cand_label: str,
+    max_points: int,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    finite = np.isfinite(lp_ref) & np.isfinite(lp_cand)
+    idx = np.flatnonzero(finite)
+    if idx.size == 0:
+        raise RuntimeError("no finite overlapping log-prob entries for scatter")
+    if idx.size > max_points:
+        rng = np.random.default_rng(0)
+        idx = rng.choice(idx, size=max_points, replace=False)
+    x = lp_ref[idx].astype(np.float64)
+    y = lp_cand[idx].astype(np.float64)
+    lo = float(min(x.min(), y.min()))
+    hi = float(max(x.max(), y.max()))
+    pad = (hi - lo) * 0.02 + 1e-6
+    lims = (lo - pad, hi + pad)
+
+    fig, ax = plt.subplots(figsize=(6.2, 6.2))
+    ax.scatter(x, y, s=3, alpha=0.2, c="#1f77b4", edgecolors="none", rasterized=True)
+    ax.plot(lims, lims, "k--", lw=1.2, label="1:1")
+    ax.set_xlim(lims)
+    ax.set_ylim(lims)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Triton log-prob (first decode step)")
+    ax.set_ylabel(f"{cand_label} log-prob (first decode step)")
+    ax.set_title(f"{cand_label} vs Triton (subsample ≤{max_points} tokens)")
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _print_alignment_block(name: str, m: dict[str, float]) -> None:
+    print(
+        f"[{name}] first-step log-probs vs Triton (reference), "
+        f"n_finite={int(m['n_finite'])}:",
+        flush=True,
+    )
+    print(
+        f"  RMSE(cand - ref) = {m['rmse']:.6g}\n"
+        f"  relative RMSE = RMSE / RMS(ref) = {m['rel_rmse_rms_ref']:.6g}\n"
+        f"  relative RMSE = RMSE / std(ref) = {m['rel_rmse_std_ref']:.6g}\n"
+        f"  max_abs = {m['max_abs']:.6g}\n"
+        f"  D_KL(Triton || {name}) = {m['kl_ref_vs_cand']:.6g} nats",
+        flush=True,
+    )
+
+
+def cmd_logprob_alignment(args: argparse.Namespace) -> int:
+    """Scatter + RMSE / relative RMSE / KL for first-step log-probs in ``.npz`` files."""
+    tri_path = Path(args.triton_npz)
+    pto_path = Path(args.pto_npz)
+    zt = np.load(tri_path)
+    lp_tri = np.asarray(zt["first_token_logprobs"])
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    max_pts = int(args.scatter_max_points)
+
+    zp = np.load(pto_path)
+    lp_pto = np.asarray(zp["first_token_logprobs"])
+    if lp_tri.shape != lp_pto.shape:
+        print("MISMATCH: Triton vs PTO first_token_logprobs length.", flush=True)
+        return 1
+    m_pto = _logprob_alignment_metrics(lp_tri, lp_pto)
+    _print_alignment_block("PTO", m_pto)
+    pto_png = out_dir / "scatter_pto_vs_triton.png"
+    _scatter_logprob_vs_ref(lp_tri, lp_pto, pto_png, "PTO", max_pts)
+    print(f"Wrote {pto_png}", flush=True)
+
+    if args.pto_mega_npz:
+        zm = np.load(Path(args.pto_mega_npz))
+        lp_m = np.asarray(zm["first_token_logprobs"])
+        if lp_tri.shape != lp_m.shape:
+            print("MISMATCH: Triton vs PTO-mega first_token_logprobs length.", flush=True)
+            return 1
+        m_m = _logprob_alignment_metrics(lp_tri, lp_m)
+        _print_alignment_block("PTO-mega", m_m)
+        mega_png = out_dir / "scatter_pto_mega_vs_triton.png"
+        _scatter_logprob_vs_ref(lp_tri, lp_m, mega_png, "PTO-mega", max_pts)
+        print(f"Wrote {mega_png}", flush=True)
+
+    return 0
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -263,12 +400,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print("MISMATCH: first-step logprob vector length differs.")
         return 1
 
-    stats = _compare_logprob_vectors(lp_tri, lp_pto)
-    print(
-        f"First-step log-probs: max_abs={stats['max_abs']:.6g}  "
-        f"rmse={stats['rmse']:.6g}  finite={int(stats['n_finite'])} / {lp_tri.size}",
-        flush=True,
-    )
+    cand_tag = pto_path.name.replace(".npz", "")
+    metrics = _logprob_alignment_metrics(lp_tri, lp_pto)
+    _print_alignment_block(cand_tag, metrics)
+    scatter_out = getattr(args, "scatter_out", None)
+    if scatter_out is not None:
+        outp = Path(scatter_out)
+        _scatter_logprob_vs_ref(
+            lp_tri,
+            lp_pto,
+            outp,
+            cand_label=cand_tag,
+            max_points=int(args.scatter_max_points),
+        )
+        print(f"Wrote scatter plot {outp}", flush=True)
+
     close = np.allclose(
         lp_tri, lp_pto, rtol=args.logprob_rtol, atol=args.logprob_atol, equal_nan=False
     )
@@ -325,7 +471,42 @@ def main() -> int:
     p_cmp.add_argument("pto_npz", type=str)
     p_cmp.add_argument("--logprob-atol", type=float, default=5e-3)
     p_cmp.add_argument("--logprob-rtol", type=float, default=2e-2)
+    p_cmp.add_argument(
+        "--scatter-out",
+        type=Path,
+        default=None,
+        metavar="PATH.png",
+        help="Optional 1:1 scatter of first-step log-probs (Triton x-axis, candidate y-axis).",
+    )
+    p_cmp.add_argument(
+        "--scatter-max-points",
+        type=int,
+        default=10_000,
+        metavar="N",
+        help="Random subsample cap for scatter plots (full vocab used for metrics).",
+    )
     p_cmp.set_defaults(func=cmd_compare)
+
+    p_la = sub.add_parser(
+        "logprob_alignment",
+        help="Print RMSE / relative RMSE / KL vs Triton and write scatter PNG(s) from .npz (no vLLM).",
+    )
+    p_la.add_argument("triton_npz", type=str)
+    p_la.add_argument("pto_npz", type=str)
+    p_la.add_argument(
+        "pto_mega_npz",
+        nargs="?",
+        default=None,
+        help="Optional third .npz for PTO-mega (second scatter.png + metrics block).",
+    )
+    p_la.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("."),
+        help="Directory for scatter_pto_vs_triton.png and scatter_pto_mega_vs_triton.png",
+    )
+    p_la.add_argument("--scatter-max-points", type=int, default=10_000, metavar="N")
+    p_la.set_defaults(func=cmd_logprob_alignment)
 
     args = root.parse_args()
     if args.command == "record" and args.num_generated < 2:

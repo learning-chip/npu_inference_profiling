@@ -1,0 +1,33 @@
+PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+(EngineCore pid=63731) PTO chunk_gated_delta_rule patch is active (6 JIT kernels, C=128).
+(EngineCore pid=63731) Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+(EngineCore pid=63731) Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:05<00:17,  6.00s/it]
+(EngineCore pid=63731) Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:12<00:12,  6.21s/it]
+(EngineCore pid=63731) Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:18<00:06,  6.40s/it]
+(EngineCore pid=63731) Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:23<00:00,  5.68s/it]
+(EngineCore pid=63731) Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:23<00:00,  5.89s/it]
+(EngineCore pid=63731) 
+Rendering prompts:   0%|          | 0/1 [00:00<?, ?it/s]Rendering prompts: 100%|██████████| 1/1 [00:00<00:00, 34.77it/s]
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/fast_inverse.cpp:13:
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/kernel_tri_inv_rec_unroll.cpp:15:
+/workdir/pto-kernels/csrc/kernel/kernel_utils.h:11:9: warning: 'MEMORY_BASE' macro redefined [-Wmacro-redefined]
+#define MEMORY_BASE
+        ^
+<command line>:1:9: note: previous definition is here
+#define MEMORY_BASE 1
+        ^
+1 warning generated.
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/fast_inverse.cpp:13:
+In file included from /workdir/pto-kernels/examples/jit_cpp/fast_inverse/kernel_tri_inv_rec_unroll.cpp:15:
+/workdir/pto-kernels/csrc/kernel/kernel_utils.h:11:9: warning: 'MEMORY_BASE' macro redefined [-Wmacro-redefined]
+#define MEMORY_BASE
+        ^
+<command line>:1:9: note: previous definition is here
+#define MEMORY_BASE 1
+        ^
+1 warning generated.
+Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.69s/it, est. speed input: 10.43 toks/s, output: 0.11 toks/s]Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.69s/it, est. speed input: 10.43 toks/s, output: 0.11 toks/s]Processed prompts: 100%|██████████| 1/1 [00:44<00:00, 44.69s/it, est. speed input: 10.43 toks/s, output: 0.11 toks/s]
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

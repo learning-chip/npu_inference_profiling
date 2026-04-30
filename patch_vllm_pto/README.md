@@ -20,7 +20,7 @@ Scripts that **`import vllm`** in the coordinator process **must call** `adapt_p
 |------|------|
 | `apply.py` | `apply_pto_patch()` — bind PTO wrapper on `vllm.model_executor.layers.fla.ops.chunk_gated_delta_rule` |
 | `pto_chunk_gated_delta_rule.py` | PTO forward (**MHA** ↔ **dynamic_bsnd**/megakernel **GQA** ↔ **dynamic_bsnd_groupvalue**/megakernel gv), `record_function("PTO_gdn_*")` scopes |
-| `compare_prefill_next_token.py` | Greedy tokens + first-step full-vocab logprobs: **`record`** / **`compare`** (**`--quantization ascend`** optional) |
+| `compare_prefill_next_token.py` | Greedy tokens + first-step full-vocab logprobs: **`record`** / **`compare`** / **`logprob_alignment`** (**`--quantization ascend`** optional) |
 | `benchmark_prefill_latency.py` | Prefill TTFT sweep → JSON lines (**`--quantization ascend`** optional) |
 | `run_benchmark_prefill_three_way.sh` | Writes `OUT_DIR/<LABEL>/{triton,pto,pto_mega}.jsonl`; env **`BENCH_QUANTIZATION`** forwards to **`benchmark_prefill_latency.py`** |
 | `run_compare_prefill.sh` | Two shell-level `python … record` invocations + `compare` (no nested Python `subprocess`) |
@@ -46,6 +46,7 @@ Default **`BENCHMARK_MODEL_SPECS`** lists **2B**, **0.8B**, **4B**, **9B**, and 
 python3 compare_prefill_next_token.py record --backend triton --output /tmp/tri.npz --device 0
 python3 compare_prefill_next_token.py record --backend pto   --output /tmp/pto.npz --device 0
 python3 compare_prefill_next_token.py compare /tmp/tri.npz /tmp/pto.npz
+python3 compare_prefill_next_token.py logprob_alignment /tmp/tri.npz /tmp/pto.npz /tmp/mega.npz --out-dir /tmp/figs
 ```
 
 ### Last measured parity (2026-04-24, Ascend 910B, NPU 0)
@@ -164,6 +165,79 @@ Benchmark JSONL (**`WARMUP=2`**, **`REPEATS=10`**): **`bench_prefill_Qwen36_35B_
 **Figure:** **`figure/prefill_speedup_35B-A3B-w8a8.png`**.
 
 Parity artifacts (local run): **`_parity_q36_35b_a3b_w8a8/35B-A3B-w8a8/`** (`compare.txt`, **`compare_mega.txt`**, `*.npz`).
+
+### First-step logprob alignment vs Triton (KL + relative RMSE)
+
+**Setup (all rows below):** first **decode** step after prefill, greedy temperature 0, **`--max-logprobs 300000`**, **`SEQ_LEN=512`**, **`NUM_GEN=5`** (so the first-step logprob vector is well defined), single NPU (**`ASCEND_RT_VISIBLE_DEVICES=0`**), recorded with **`compare_prefill_next_token.py record`** then summarized with **`logprob_alignment`** (or **`compare`**, which prints the same scalar block). **Reference** distribution = **Triton**; **candidate** = **PTO staged** or **PTO-mega**. Arrays are vLLM **log-probabilities** per vocabulary id; metrics use intersecting finite entries only.
+
+**Relative RMSE** is reported two ways (log-prob space, candidate minus reference): **`RMSE / RMS(ref)`** and **`RMSE / std(ref)`** over finite Triton logprobs.
+
+**KL divergence** is **`D_KL(P_triton ‖ P_cand)`** in **nats**: both sides are normalized to probability mass functions via **`exp(logprob)`** on the recorded finite support (same construction as inside **`logprob_alignment`**).
+
+Measured **2026-04-29** on this checkout (hardware: Ascend-class NPU).
+
+| Model | Candidate | RMSE (abs Δlog p) | Rel. RMSE `/ RMS(ref)` | Rel. RMSE `/ std(ref)` | `D_KL(Triton ‖ cand)` (nats) |
+|-------|-----------|------------------:|------------------------:|-------------------------:|--------------------------------:|
+| **Qwen3.5-9B** BF16 | PTO staged | 0.1178 | 0.00405 | 0.0552 | 6.72×10⁻⁶ |
+|  | PTO-mega | 0.1178 | 0.00405 | 0.0552 | 6.72×10⁻⁶ |
+| **Qwen3.6-27B-w8a8** ascend | PTO staged | 1.313 | 0.0514 | 0.707 | 1.29×10⁻³ |
+|  | PTO-mega | 1.313 | 0.0514 | 0.707 | 1.29×10⁻³ |
+| **Qwen3.6-35B-A3B-w8a8** MoE ascend | PTO staged | 0.465 | 0.0167 | 0.222 | 1.83×10⁻⁵ |
+|  | PTO-mega | 0.339 | 0.0121 | 0.162 | 2.58×10⁻⁵ |
+
+**Notes:** On **9B** and **27B**, PTO staged and PTO-mega report the **same** numbers on this probe (bit-level match for 9B RMSE here; 27B staged/mega match each other vs Triton). **35B** MoE: staged and mega **differ** slightly; mega is closer to Triton on RMSE and KL for this step. **27B** carries the largest RMSE vs Triton among the three—typical for ascend W8A8 while greedy token IDs still agree. Scatter plots (random subsample for display): **`_parity_q35_gqa_9b_logprob/logprob_figs/`**, **`_parity_q36_27b_w8a8/logprob_figs/`**, **`_parity_q36_35b_a3b_w8a8/35B-A3B-w8a8/logprob_figs/`**.
+
+**Reproduce (from `patch_vllm_pto/`):** set **`export VLLM_PTO_PATCH_DIR="$(pwd)"`** for **`pto`** / **`pto_mega`** runs; omit **`--quantization`** for BF16 checkpoints.
+
+**Qwen3.5-9B** (artifacts: **`_parity_q35_gqa_9b_logprob/`**):
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=0
+export VLLM_PTO_PATCH_DIR="$(pwd)"
+OUT=_parity_q35_gqa_9b_logprob
+M9=/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a/
+mkdir -p "$OUT"
+for b in triton pto pto_mega; do
+  python3 compare_prefill_next_token.py record --backend "$b" --output "$OUT/${b}.npz" \
+    --model "$M9" --device 0 --seq-len 512 --num-generated 5 --max-logprobs 300000
+done
+python3 compare_prefill_next_token.py logprob_alignment \
+  "$OUT/triton.npz" "$OUT/pto.npz" "$OUT/pto_mega.npz" --out-dir "$OUT/logprob_figs"
+```
+
+**Qwen3.6-27B-w8a8** (requires **`--quantization ascend`**; reuse or overwrite **`_parity_q36_27b_w8a8/*.npz`**):
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=0
+export VLLM_PTO_PATCH_DIR="$(pwd)"
+OUT=_parity_q36_27b_w8a8
+M27=/scratch/model_weights/Qwen3.6-27B-w8a8/
+mkdir -p "$OUT"
+for b in triton pto pto_mega; do
+  python3 compare_prefill_next_token.py record --backend "$b" --output "$OUT/${b}.npz" \
+    --model "$M27" --device 0 --seq-len 512 --num-generated 5 --max-logprobs 300000 \
+    --quantization ascend
+done
+python3 compare_prefill_next_token.py logprob_alignment \
+  "$OUT/triton.npz" "$OUT/pto.npz" "$OUT/pto_mega.npz" --out-dir "$OUT/logprob_figs"
+```
+
+**Qwen3.6-35B-A3B-w8a8** (MoE; artifacts under **`_parity_q36_35b_a3b_w8a8/35B-A3B-w8a8/`** if you mirror the layout used for parity tables):
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=0
+export VLLM_PTO_PATCH_DIR="$(pwd)"
+OUT=_parity_q36_35b_a3b_w8a8/35B-A3B-w8a8
+M35=/scratch/model_weights/Qwen3.6-35B-A3B-w8a8/
+mkdir -p "$OUT"
+for b in triton pto pto_mega; do
+  python3 compare_prefill_next_token.py record --backend "$b" --output "$OUT/${b}.npz" \
+    --model "$M35" --device 0 --seq-len 512 --num-generated 5 --max-logprobs 300000 \
+    --quantization ascend
+done
+python3 compare_prefill_next_token.py logprob_alignment \
+  "$OUT/triton.npz" "$OUT/pto.npz" "$OUT/pto_mega.npz" --out-dir "$OUT/logprob_figs"
+```
 
 ## Worker hook
 
