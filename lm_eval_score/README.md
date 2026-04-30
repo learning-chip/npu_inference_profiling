@@ -91,7 +91,62 @@ JSON field **`mmlu_coverage`**: `mmlu_subset_6` | `full_mmlu_group` | `custom_ta
 | `qwen36_27b_w8a8` | `/scratch/model_weights/Qwen3.6-27B-w8a8` |
 | `qwen36_35b_a3b_w8a8` | `/scratch/model_weights/Qwen3.6-35B-A3B-w8a8` |
 
-Dense presets omit Ascend quantization; W8A8 presets use `quantization=ascend` and MoE expert parallel where applicable.
+Dense Qwen3.5 presets use BF16 weights (`quantization` omitted). Qwen3.6 W8A8 checkpoints use `quantization=ascend`. **`qwen36_27b_w8a8` is a dense model — do not enable expert parallelism.** **`qwen36_35b_a3b_w8a8`** is MoE; the harness enables expert parallel for that preset.
+
+---
+
+## Verified runtime configs (single NPU, avoid OOM)
+
+Hardware baseline for the settings below: **one Ascend 910B2-class card (~64 GiB HBM)** with **`tensor_parallel_size=1`** and **`dtype=bfloat16`**, running the **default bundle** (six MMLU subjects + optional GPQA + `wikitext`). Adjust if your card has less headroom or another tenant is using HBM (see [NPU selection](#npu-selection)).
+
+### Why wrong settings OOM
+
+1. **Engine startup (`gpu_memory_utilization`)** — vLLM reserves a pool proportional to `gpu_memory_utilization × total_HBM` for weights, KV cache, and profiling buffers. If **quantized ~27B+ weights (~34 GiB)** already exceed that pool at a **low** ratio (e.g. **0.52**), KV initialization fails with **“No available memory for the cache blocks”** (negative “available KV cache memory” in logs).
+2. **Wikitext + `prompt_logprobs`** — rolling evaluation can schedule **very long prompts** (~one token under `max_model_len`). The harness asks vLLM for **full-vocabulary log-probs**, which triggers a large **`log_softmax`** over the logits (**often ~7–8 GiB** peak on large vocab). If KV reservation leaves almost no scratch memory, you hit **NPU OOM during Wikitext** even when smaller tasks succeed.
+
+So **large quantized checkpoints** need a **higher** `gpu_memory_utilization` than tiny dense models, but **still** need **shorter `max_model_len` and/or smaller batch** than tiny models so Wikitext has spare HBM for that softmax.
+
+### Settings verified on this stack
+
+| `--preset` | `--max-model-len` | `--gpu-memory-utilization` | `--max-batch-size` | Expert parallel (vLLM) | Notes |
+|------------|-------------------|---------------------------|--------------------|-------------------------|--------|
+| `qwen35_0_8b` | **8192** | **0.52** | **8** | Off | Small BF16 weights; low utilization leaves room for Wikitext log-softmax. |
+| `qwen35_9b` | **8192** | **0.52** | **8** | Off | Same envelope as 0.8B on ~64 GiB with TP=1. |
+| `qwen36_27b_w8a8` | **4096** | **0.82** | **4** | **Off** | Dense W8A8 ~34 GiB weights: **0.52 breaks KV init**; **8192 + Wikitext OOMs** without TP/extra strategies on one card. |
+| `qwen36_35b_a3b_w8a8` | **4096** | **0.82** | **4** | **On** (MoE) | Same practical limits as 27B W8A8 here for weights + Wikitext peak. |
+
+`--max-batch-size` is forwarded to **`lm_eval.simple_evaluate(..., max_batch_size=...)`**, which becomes **`max_num_seqs`** in the lm-eval vLLM wrapper (caps concurrent sequences).
+
+Example (matches verified rows):
+
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=0   # or an idle card index
+
+python3 /workdir/npu_inference_profiling/lm_eval_score/run_mmlu_vllm.py \
+  --preset qwen36_27b_w8a8 \
+  --skip-gpqa-diamond \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.82 \
+  --max-batch-size 4 \
+  --output-json /tmp/qwen27.json
+```
+
+### Environment variables (same knobs as CLI)
+
+If set, these override the argparse defaults (see `run_mmlu_vllm.py`): **`LM_EVAL_MAX_MODEL_LEN`**, **`LM_EVAL_GPU_MEMORY_UTILIZATION`**, **`LM_EVAL_MAX_BATCH_SIZE`**.
+
+### Wikitext comparability
+
+Runs at **`max_model_len=8192`** (qwen35 presets above) use a **longer** Wikitext rolling window than **`4096`** (qwen36 quantized presets). **Do not compare Wikitext perplexity / bits-per-byte across those groups** unless you rerun with a common `max_model_len`.
+
+### Relation to `run_preset_suite.sh`
+
+`run_preset_suite.sh` exports conservative **`LM_EVAL_*`** defaults intended for **mixed preset suites** (see the script). Those defaults may **differ** from the verified qwen35 row (8192 / 0.52 / 8). To reproduce the table exactly:
+
+- For **only** `qwen35_0_8b` / `qwen35_9b`: unset `LM_EVAL_*` and pass **`--max-model-len 8192 --gpu-memory-utilization 0.52 --max-batch-size 8`**, or set those env vars before invoking Python.
+- For **only** `qwen36_*`: use **`--max-model-len 4096 --gpu-memory-utilization 0.82 --max-batch-size 4`** (or the matching env vars).
+
+An example **four-preset** suite that matches verified rows **per tier** is two loops (small vs large) with different env/flags, or separate shell invocations — `run_preset_suite.sh` as shipped applies **one** global `LM_EVAL_*` set to all presets.
 
 ---
 
@@ -118,6 +173,8 @@ Creates **`outputs/subset_eval/run_<timestamp>/`** with `MANIFEST.txt` and one s
 export ASCEND_RT_VISIBLE_DEVICES=0
 /workdir/npu_inference_profiling/lm_eval_score/run_preset_suite.sh
 ```
+
+The suite exports **`LM_EVAL_MAX_MODEL_LEN`**, **`LM_EVAL_GPU_MEMORY_UTILIZATION`**, and **`LM_EVAL_MAX_BATCH_SIZE`** for every preset (see the script). For **tier-accurate** knobs matching [verified runtime configs](#verified-runtime-configs-single-npu-avoid-oom), export overrides before running or split small vs large presets into separate invocations.
 
 This invokes **`stop_prior_eval_jobs.sh`** first (unless `SKIP_STOP_PRIOR=1`) so a previous background eval does not share the device.
 
