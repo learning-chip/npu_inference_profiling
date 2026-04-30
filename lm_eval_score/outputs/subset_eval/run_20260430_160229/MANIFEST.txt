@@ -1,0 +1,8 @@
+suite_run_dir=/workdir/npu_inference_profiling/lm_eval_score/outputs/subset_eval/run_20260430_160229
+created_local=2026-04-30T16:02:29+00:00
+ascend_rt_visible_devices=1
+lm_eval_gpu_memory_utilization=0.52
+lm_eval_max_batch_size=8
+gpqa_diamond_zeroshot=skipped_no_hf_token
+tasks_default=6_mmlu_subjects+gpqa_diamond_zeroshot+wikitext
+per_preset_files=eval.json eval_tables.txt eval.log

@@ -1,0 +1,17 @@
+Full subset eval summary (run_20260430_153437)
+Suite directory: /workdir/npu_inference_profiling/lm_eval_score/outputs/subset_eval/run_20260430_153437
+
+Notes:
+- GPQA Diamond was skipped for all rows (no HF_TOKEN in these runs).
+- qwen35_0_8b / qwen35_9b used max_model_len=8192 and gpu_memory_utilization=0.52 (original suite).
+- qwen36_27b_w8a8 / qwen36_35b_a3b_w8a8 used max_model_len=4096, gpu_memory_utilization=0.82, max_batch_size=4 to fit quantized weights + KV on one NPU and avoid Wikitext rolling OOM during full-vocab prompt_logprobs.
+- Wikitext metrics are NOT directly comparable between qwen35_* (8192 ctx) and qwen36_* (4096 ctx).
+- 27B checkpoint is dense (expert_parallel=false); 35B-A3B MoE uses expert_parallel=true.
+
+
+preset | max_len | gpu_util | EP | wall_s | astronomy | high_school_mathematics | college_biology | high_school_world_history | professional_law | philosophy | wiki_w_ppl | wiki_bpb
+-------+---------+----------+-----+--------+-----------+-------------------------+-----------------+---------------------------+------------------+------------+------------+---------
+qwen35_0_8b | 8192 | 0.52 | False | 649.6 | 0.5000 | 0.2815 | 0.6111 | 0.6034 | 0.3768 | 0.5820 | 19.8645 | 0.8064
+qwen35_9b | 8192 | 0.52 | False | 930.2 | 0.9276 | 0.5370 | 0.9306 | 0.9030 | 0.6037 | 0.8071 | 9.2620 | 0.6005
+qwen36_27b_w8a8 | 4096 | 0.82 | False | 2975.6 | 0.9408 | 0.6556 | 0.9514 | 0.9325 | 0.6721 | 0.8103 | 8.2030 | 0.5678
+qwen36_35b_a3b_w8a8 | 4096 | 0.82 | True | 2424.8 | 0.8947 | 0.6222 | 0.9444 | 0.9409 | 0.7040 | 0.8778 | 8.1664 | 0.5666
