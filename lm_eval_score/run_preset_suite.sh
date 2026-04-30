@@ -18,8 +18,11 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 SUITE_ROOT="${ROOT}/outputs/subset_eval/run_${STAMP}"
 mkdir -p "${SUITE_ROOT}"
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
-export LM_EVAL_GPU_MEMORY_UTILIZATION="${LM_EVAL_GPU_MEMORY_UTILIZATION:-0.52}"
-export LM_EVAL_MAX_BATCH_SIZE="${LM_EVAL_MAX_BATCH_SIZE:-8}"
+# Wikitext rolling + prompt_logprobs does full-vocab log_softmax — leave headroom (shorten ctx + smaller batches).
+export LM_EVAL_MAX_MODEL_LEN="${LM_EVAL_MAX_MODEL_LEN:-4096}"
+# Balance KV reservation vs scratch for logits (too low → negative KV blocks on busy NPUs).
+export LM_EVAL_GPU_MEMORY_UTILIZATION="${LM_EVAL_GPU_MEMORY_UTILIZATION:-0.72}"
+export LM_EVAL_MAX_BATCH_SIZE="${LM_EVAL_MAX_BATCH_SIZE:-4}"
 
 PRESETS=(qwen35_0_8b qwen35_9b qwen36_27b_w8a8 qwen36_35b_a3b_w8a8)
 
@@ -27,6 +30,7 @@ PRESETS=(qwen35_0_8b qwen35_9b qwen36_27b_w8a8 qwen36_35b_a3b_w8a8)
   echo "suite_run_dir=${SUITE_ROOT}"
   echo "created_local=$(date -Is)"
   echo "ascend_rt_visible_devices=${ASCEND_RT_VISIBLE_DEVICES:-}"
+  echo "lm_eval_max_model_len=${LM_EVAL_MAX_MODEL_LEN:-}"
   echo "lm_eval_gpu_memory_utilization=${LM_EVAL_GPU_MEMORY_UTILIZATION:-}"
   echo "lm_eval_max_batch_size=${LM_EVAL_MAX_BATCH_SIZE:-}"
   if [[ ${#SKIP_GPQA_ARGS[@]} -eq 0 ]]; then

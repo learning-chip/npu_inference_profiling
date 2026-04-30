@@ -83,7 +83,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         "qwen36_27b_w8a8",
         "/scratch/model_weights/Qwen3.6-27B-w8a8",
         "ascend",
-        True,
+        False,
     ),
     "qwen36_35b_a3b_w8a8": ModelPreset(
         "qwen36_35b_a3b_w8a8",
@@ -175,7 +175,11 @@ def _resolve_expert_parallel(args: argparse.Namespace) -> bool:
         return False
     if args.preset:
         return MODEL_PRESETS[args.preset].expert_parallel
-    return True
+    # Without a preset, avoid enabling EP on dense checkpoints (vLLM rejects EP when num_experts==0).
+    mp = (args.model or "").lower()
+    if "a3b" in mp or "moe" in mp:
+        return True
+    return False
 
 
 def build_model_args(ns: argparse.Namespace) -> dict[str, object]:
@@ -325,7 +329,16 @@ def main() -> None:
         default=1,
         help="Single-device default: 1 (no tensor parallelism)",
     )
-    parser.add_argument("--max-model-len", type=int, default=8192)
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=(
+            int(os.environ["LM_EVAL_MAX_MODEL_LEN"])
+            if "LM_EVAL_MAX_MODEL_LEN" in os.environ
+            else 8192
+        ),
+        help="Context length for vLLM (lower helps Wikitext rolling + prompt_logprobs peak memory)",
+    )
     parser.add_argument("--dtype", type=str, default="bfloat16")
     parser.add_argument(
         "--gpu-memory-utilization",
