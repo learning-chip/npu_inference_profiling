@@ -1,0 +1,15 @@
+timing_seconds: {"wall_clock_total_seconds": 698.6645, "vllm_llm_init_seconds": 58.3868, "lm_eval_model_setup_seconds": 61.0542, "tokenizer_config_overhead_seconds": 2.6674, "eval_execution_seconds": 637.6103, "eval_est_speed_input_toks_per_s_last": 4262.07, "eval_est_speed_output_toks_per_s_last": 19.36, "eval_est_speed_input_toks_per_s_peak": 161770.86, "eval_est_speed_output_toks_per_s_peak": 213.04, "eval_throughput_note": "From vLLM tqdm postfix during Processed prompts (running average tot_tokens/elapsed per llm.py; peaks accumulate across batches)."}
+vLLM_tqdm_est_speed_toks_per_s: last_input=4262.07, last_output=19.36, peak_input=161770.86, peak_output=213.04
+
+|            Tasks             |Version|Filter|n-shot|    Metric     |   | Value |   |Stderr|
+|------------------------------|------:|------|-----:|---------------|---|------:|---|------|
+|mmlu_astronomy                |      1|none  |     0|acc            |↑  | 0.5000|±  |0.0407|
+|mmlu_college_biology          |      1|none  |     0|acc            |↑  | 0.6111|±  |0.0408|
+|mmlu_high_school_mathematics  |      1|none  |     0|acc            |↑  | 0.2815|±  |0.0274|
+|mmlu_high_school_world_history|      1|none  |     0|acc            |↑  | 0.6034|±  |0.0318|
+|mmlu_philosophy               |      1|none  |     0|acc            |↑  | 0.5820|±  |0.0280|
+|mmlu_professional_law         |      1|none  |     0|acc            |↑  | 0.3768|±  |0.0124|
+|wikitext                      |      2|none  |     0|bits_per_byte  |↓  | 0.8064|±  |   N/A|
+|                              |       |none  |     0|byte_perplexity|↓  | 1.7488|±  |   N/A|
+|                              |       |none  |     0|word_perplexity|↓  |19.8645|±  |   N/A|
+
