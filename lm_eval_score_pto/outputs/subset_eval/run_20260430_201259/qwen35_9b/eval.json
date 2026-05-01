@@ -1,0 +1,74 @@
+{
+  "preset": "qwen35_9b",
+  "model_path": "/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+  "model_args": {
+    "pretrained": "/scratch/model_weights/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+    "trust_remote_code": true,
+    "max_model_len": 8192,
+    "tensor_parallel_size": 1,
+    "dtype": "bfloat16",
+    "enforce_eager": true,
+    "gpu_memory_utilization": 0.52,
+    "seed": 1234
+  },
+  "tasks": [
+    "mmlu_astronomy",
+    "mmlu_high_school_mathematics",
+    "mmlu_college_biology",
+    "mmlu_high_school_world_history",
+    "mmlu_professional_law",
+    "mmlu_philosophy",
+    "wikitext"
+  ],
+  "task_string": "mmlu_astronomy,mmlu_high_school_mathematics,mmlu_college_biology,mmlu_high_school_world_history,mmlu_professional_law,mmlu_philosophy,gpqa_diamond_zeroshot,wikitext",
+  "gpqa_diamond_included": false,
+  "limit": null,
+  "seed": 1234,
+  "timing": {
+    "wall_clock_total_seconds": 887.2526,
+    "vllm_llm_init_seconds": 89.9374,
+    "lm_eval_model_setup_seconds": 92.5578,
+    "tokenizer_config_overhead_seconds": 2.6204,
+    "eval_execution_seconds": 794.6948,
+    "eval_est_speed_input_toks_per_s_last": 3504.02,
+    "eval_est_speed_output_toks_per_s_last": 15.91,
+    "eval_est_speed_input_toks_per_s_peak": 153332.56,
+    "eval_est_speed_output_toks_per_s_peak": 197.21,
+    "eval_throughput_note": "From vLLM tqdm postfix during Processed prompts (running average tot_tokens/elapsed per llm.py; peaks accumulate across batches)."
+  },
+  "results": {
+    "mmlu_astronomy": {
+      "acc,none": 0.9276315789473685,
+      "acc_stderr,none": 0.0210850112618841
+    },
+    "mmlu_college_biology": {
+      "acc,none": 0.9236111111111112,
+      "acc_stderr,none": 0.022212203938345915
+    },
+    "mmlu_high_school_mathematics": {
+      "acc,none": 0.5481481481481482,
+      "acc_stderr,none": 0.03034386299851263
+    },
+    "mmlu_high_school_world_history": {
+      "acc,none": 0.8987341772151899,
+      "acc_stderr,none": 0.019637720526065487
+    },
+    "mmlu_philosophy": {
+      "acc,none": 0.8102893890675241,
+      "acc_stderr,none": 0.022268196258783228
+    },
+    "mmlu_professional_law": {
+      "acc,none": 0.6023468057366362,
+      "acc_stderr,none": 0.012499840347460642
+    },
+    "wikitext": {
+      "word_perplexity,none": 9.261891932156018,
+      "word_perplexity_stderr,none": "N/A",
+      "byte_perplexity,none": 1.5162739645925083,
+      "byte_perplexity_stderr,none": "N/A",
+      "bits_per_byte,none": 0.600530447209298,
+      "bits_per_byte_stderr,none": "N/A"
+    }
+  },
+  "groups": null
+}

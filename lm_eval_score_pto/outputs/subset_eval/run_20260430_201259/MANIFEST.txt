@@ -1,0 +1,11 @@
+suite_run_dir=/workdir/npu_inference_profiling/lm_eval_score_pto/outputs/subset_eval/run_20260430_201259
+created_local=2026-04-30T20:12:59+00:00
+ascend_rt_visible_devices=1
+pto_patch_dir=/workdir/npu_inference_profiling/lm_eval_score_pto/../patch_vllm_pto
+pto_megakernel=1
+delegate_script=/workdir/npu_inference_profiling/lm_eval_score_pto/../lm_eval_score/run_mmlu_vllm.py
+gpqa_diamond_zeroshot=skipped_no_hf_token
+tasks_default=6_mmlu_subjects+gpqa_diamond_zeroshot+wikitext
+per_preset_files=eval.json eval_tables.txt eval.log
+tier_small_qwen35=8192_0.52_8
+tier_large_qwen36_w8a8=4096_0.82_4
